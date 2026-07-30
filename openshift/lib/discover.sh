@@ -3,8 +3,8 @@
 # CLUSTERS array. Source config.sh + common.sh first, then this file.
 #
 # Identifier shape: "<anything><3 letters><digits><1 letter>", e.g.
-# namicgswd52u -> three_letters=swd digits=52 last_letter=u (env=uat).
-# short name = three_letters + digits + last_letter ("swd52u").
+# clusterabc12345u -> three_letters=abc digits=12345 last_letter=u (env=uat).
+# short name = three_letters + digits + last_letter ("abc12345u").
 # last_letter -> env: d=dev, u=uat, p=prod, s=sit (dismissed, not added),
 # anything else is unrecognized and also skipped.
 #

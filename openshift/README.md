@@ -92,8 +92,8 @@ First time setup:
 2. Make a text file with your cluster identifiers, one per line (see
    `tests/fixtures/cluster-ids.txt` for the format), e.g.:
    ```
-   namicgswd52u
-   namicggtd128d
+   clusterabc12345u
+   clusterxyz67890d
    ```
 3. Run `./oo.sh -a discover -f your-cluster-ids.txt` to populate `CLUSTERS`.
 
@@ -165,10 +165,10 @@ cluster, lists its namespaces, derives each namespace's project, and writes
 the whole `CLUSTERS` array. If the target file already exists it's backed up
 first as `<file>.bak.<timestamp>`.
 
-**Identifier parsing**: an identifier like `namicgswd52u` is read from the
+**Identifier parsing**: an identifier like `clusterabc12345u` is read from the
 end — last letter is the env (`d`=dev, `u`=uat, `p`=prod, `s`=sit is silently
 dismissed, anything else is skipped with a warning), the digits right before
-it plus the 3 letters before *those* become the short name (`swd52u`). The
+it plus the 3 letters before *those* become the short name (`abc12345u`). The
 server URL is `https://api.<full identifier>.<DISCOVERY_DOMAIN>`.
 
 **Known limitation**: discovery always *fully replaces* `CLUSTERS` from

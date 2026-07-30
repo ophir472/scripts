@@ -1,10 +1,10 @@
 # Test fixture for `oo.sh -a discover`. One identifier per line.
-namicgswd52u
-namicggtd128d
+clusterabc12345u
+clusterxyz67890d
 
 # sit -- should be silently dismissed, no warning
-namicgabc99s
+clusterfoo11111s
 # unrecognized suffix -- should warn
-namicgabc99x
+clusterbar22222q
 # too short to parse -- should warn as malformed
 short

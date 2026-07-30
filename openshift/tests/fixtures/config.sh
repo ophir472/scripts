@@ -9,4 +9,4 @@ CLUSTERS=(
 )
 USER_DEFAULT="testuser"
 USER_PROD="produser"
-DISCOVERY_DOMAIN="ecs.dyn.nsroot.net"
+DISCOVERY_DOMAIN="example.com"

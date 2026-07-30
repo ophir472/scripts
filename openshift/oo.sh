@@ -27,7 +27,7 @@ Actions:
                 search base64-decoded secret values for <string>
   -a discover -f <file>
                 log into clusters listed in <file> (one identifier per line, e.g.
-                namicgswd52u) and regenerate config.sh's CLUSTERS array
+                clusterabc12345u) and regenerate config.sh's CLUSTERS array
 
 Selection (combine as needed; default is -e all -> every cluster, every namespace).
 -e/-c/-n/-p all accept comma-separated lists (e.g. -e dev,uat or -c t1,t2):

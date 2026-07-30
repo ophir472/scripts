@@ -10,9 +10,11 @@
 USER_DEFAULT="my-username"
 USER_PROD="my-prod-username"
 
-# Domain `oo.sh -a discover` appends to build a cluster's API URL:
-# https://api.<identifier>.<DISCOVERY_DOMAIN>
-DISCOVERY_DOMAIN="ecs.dyn.nsroot.net"
+# REQUIRED before running `oo.sh -a discover`: the domain it appends to build
+# a cluster's API URL: https://api.<identifier>.<DISCOVERY_DOMAIN>
+# Left blank on purpose -- fill in your own domain. discover will refuse to
+# run while this is empty.
+DISCOVERY_DOMAIN=""
 
 # Each entry: "env|shortname|server|namespace|project" (pipe-delimited -- the
 # server field is a URL and contains colons, so ':' can't be the delimiter)
@@ -22,8 +24,9 @@ DISCOVERY_DOMAIN="ecs.dyn.nsroot.net"
 #   namespace - a namespace discovery found on that cluster
 #   project   - project name derived from the namespace (may be empty)
 # One row per (cluster, namespace) pair -- a cluster with 5 namespaces gets 5 rows.
+# These are illustrative placeholders; run discover to replace them with your own.
 CLUSTERS=(
-  "dev|swd52u|https://api.namicgswd52u.${DISCOVERY_DOMAIN}|qwe-rty-checkout-111111|checkout"
-  "dev|swd52u|https://api.namicgswd52u.${DISCOVERY_DOMAIN}|sm-controlplane-222222|"
-  "prod|gtd128d|https://api.namicggtd128d.${DISCOVERY_DOMAIN}|qwe-rty-checkout-333333|checkout"
+  "dev|abc12345d|https://api.clusterabc12345d.example.com|qwe-rty-checkout-111111|checkout"
+  "dev|abc12345d|https://api.clusterabc12345d.example.com|sm-controlplane-222222|"
+  "prod|xyz67890p|https://api.clusterxyz67890p.example.com|qwe-rty-checkout-333333|checkout"
 )
