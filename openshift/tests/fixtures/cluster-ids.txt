@@ -1,0 +1,10 @@
+# Test fixture for `oo.sh -a discover`. One identifier per line.
+namicgswd52u
+namicggtd128d
+
+# sit -- should be silently dismissed, no warning
+namicgabc99s
+# unrecognized suffix -- should warn
+namicgabc99x
+# too short to parse -- should warn as malformed
+short

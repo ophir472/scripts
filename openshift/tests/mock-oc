@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Fake `oc` for tests. Behavior is tunable via env vars so tests can shape
+# what a cluster "returns" without touching a real cluster:
+#   MOCK_NAMESPACES         space-separated namespace names (default: 2 fixture namespaces)
+#   MOCK_QUOTA_CPU_ALLOC/USED, MOCK_QUOTA_MEM_ALLOC/USED
+#   MOCK_SECRET_NS, MOCK_SECRET_VALUE   which namespace holds a secret, and its plaintext value
+#   MOCK_LOGIN_FAIL_SERVERS space-separated substrings; `oc login` fails if --server matches one
+
+args=("$@")
+get_opt() {
+  local name="$1" i
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    if [[ "${args[$i]}" == "$name" ]]; then
+      printf '%s' "${args[$((i + 1))]}"
+      return
+    fi
+  done
+}
+
+joined=" $* "
+
+if [[ "$joined" == *" login "* ]]; then
+  server=$(get_opt --server)
+  kubeconfig=$(get_opt --kubeconfig)
+  for pat in ${MOCK_LOGIN_FAIL_SERVERS:-}; do
+    if [[ "$server" == *"$pat"* ]]; then
+      exit 1
+    fi
+  done
+  echo "fake-login" > "$kubeconfig"
+  exit 0
+fi
+
+if [[ "$joined" == *" get projects "* ]]; then
+  printf '%s' "${MOCK_NAMESPACES:-qwe-rty-checkout-111111 sm-controlplane-222222}"
+  exit 0
+fi
+
+if [[ "$joined" == *" get quota "* ]]; then
+  printf '{"items":[{"spec":{"hard":{"requests.cpu":"%s","requests.memory":"%s"}},"status":{"used":{"requests.cpu":"%s","requests.memory":"%s"}}}]}' \
+    "${MOCK_QUOTA_CPU_ALLOC:-4}" "${MOCK_QUOTA_MEM_ALLOC:-8Gi}" "${MOCK_QUOTA_CPU_USED:-1500m}" "${MOCK_QUOTA_MEM_USED:-2Gi}"
+  exit 0
+fi
+
+if [[ "$joined" == *" describe quota "* ]]; then
+  echo "mock describe output"
+  exit 0
+fi
+
+if [[ "$joined" == *" get secrets "* ]]; then
+  encoded=$(printf '%s' "${MOCK_SECRET_VALUE:-hello-world}" | base64)
+  printf '{"items":[{"metadata":{"namespace":"%s","name":"mysecret"},"data":{"key":"%s"}}]}' \
+    "${MOCK_SECRET_NS:-qwe-rty-checkout-111111}" "$encoded"
+  exit 0
+fi
+
+exit 0

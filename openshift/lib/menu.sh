@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# Interactive menu shown when oo.sh is run with no arguments. Source config.sh
+# + common.sh + quota.sh + search.sh first, then this file.
+
+# Numbered single-choice prompt. $1 = prompt text, remaining args = options.
+# Echoes the chosen option text (not its number).
+menu_choose_one() {
+  local prompt="$1"; shift
+  local -a options=("$@")
+  local i choice
+  echo "$prompt" >&2
+  for ((i = 0; i < ${#options[@]}; i++)); do
+    printf '  %d) %s\n' "$((i + 1))" "${options[$i]}" >&2
+  done
+  while true; do
+    read -rp "> " choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#options[@]} )); then
+      echo "${options[$((choice - 1))]}"
+      return 0
+    fi
+    echo "Enter a number between 1 and ${#options[@]}." >&2
+  done
+}
+
+# Numbered multi-choice prompt with an "All" shortcut. $1 = prompt text,
+# remaining args = options. User types comma-separated numbers (e.g. "1,3") or
+# "all". Echoes the chosen options newline-separated, or the single line "all".
+menu_choose_many() {
+  local prompt="$1"; shift
+  local -a options=("$@")
+  local i choice num out
+  echo "$prompt (comma-separated numbers, or \"all\")" >&2
+  for ((i = 0; i < ${#options[@]}; i++)); do
+    printf '  %d) %s\n' "$((i + 1))" "${options[$i]}" >&2
+  done
+  while true; do
+    read -rp "> " choice
+    choice="$(echo "$choice" | tr -d '[:space:]')"
+    if [[ "$choice" == "all" || "$choice" == "All" || -z "$choice" ]]; then
+      echo "all"
+      return 0
+    fi
+    if [[ "$choice" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+      out=""
+      local IFS=','
+      local valid=1
+      for num in $choice; do
+        if (( num < 1 || num > ${#options[@]} )); then
+          valid=0
+          break
+        fi
+        out="${out:+$out
+}${options[$((num - 1))]}"
+      done
+      if [[ $valid -eq 1 ]]; then
+        printf '%s\n' "$out"
+        return 0
+      fi
+    fi
+    echo "Enter comma-separated numbers between 1 and ${#options[@]}, or \"all\"." >&2
+  done
+}
+
+# $1 = prompt text. Returns 0 for yes, 1 for no. Defaults to no on empty input.
+menu_confirm() {
+  local prompt="$1" answer
+  read -rp "$prompt [y/N] " answer
+  [[ "$answer" =~ ^[Yy]$ ]]
+}
+
+# Joins a newline-separated list (as produced by menu_choose_many) into a
+# comma-separated string suitable for CLUSTER_FILTER/ENV_FILTER/PROJECT_FILTER.
+menu_lines_to_csv() {
+  local input="$1" IFS_OLD="$IFS"
+  local line out=""
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && out="${out:+$out,}$line"
+  done <<< "$input"
+  echo "$out"
+}
+
+interactive_run() {
+  local -a all_actions=("quota" "search")
+  local chosen_action entry env short server
+  chosen_action=$(menu_choose_one "What do you want to do?" "${all_actions[@]}")
+
+  config_list_envs
+  if [[ ${#CONFIG_ENVS[@]} -eq 0 ]]; then
+    echo "ERROR: config.sh has no clusters. Run 'oo.sh -a discover -f <file>' first." >&2
+    exit 1
+  fi
+  local envs_raw envs_csv
+  envs_raw=$(menu_choose_many "Which environment(s)?" "${CONFIG_ENVS[@]}")
+  if [[ "$envs_raw" == "all" ]]; then
+    envs_csv="all"
+  else
+    envs_csv=$(menu_lines_to_csv "$envs_raw")
+  fi
+
+  config_list_projects
+  local projects_raw projects_csv
+  if [[ ${#CONFIG_PROJECTS[@]} -eq 0 ]]; then
+    projects_csv="all"
+  else
+    projects_raw=$(menu_choose_many "Which project(s)?" "${CONFIG_PROJECTS[@]}")
+    if [[ "$projects_raw" == "all" ]]; then
+      projects_csv="all"
+    else
+      projects_csv=$(menu_lines_to_csv "$projects_raw")
+    fi
+  fi
+
+  config_match_clusters "$envs_csv" "$projects_csv"
+  if [[ ${#MENU_CLUSTERS[@]} -eq 0 ]]; then
+    echo "ERROR: no clusters in config.sh match that env/project combination." >&2
+    exit 1
+  fi
+
+  echo "Matching clusters (default: all of these):" >&2
+  for entry in "${MENU_CLUSTERS[@]}"; do
+    IFS='|' read -r env short server <<< "$entry"
+    printf '  %s (%s) - %s\n' "$short" "$env" "$server" >&2
+  done
+
+  local final_shorts_csv
+  if menu_confirm "Narrow down which of these clusters to use?"; then
+    local -a short_options=()
+    for entry in "${MENU_CLUSTERS[@]}"; do
+      IFS='|' read -r env short server <<< "$entry"
+      short_options+=("$short ($env) - $server")
+    done
+    local picked_raw picked_csv
+    picked_raw=$(menu_choose_many "Which cluster(s)?" "${short_options[@]}")
+    if [[ "$picked_raw" == "all" ]]; then
+      final_shorts_csv=""
+      for entry in "${MENU_CLUSTERS[@]}"; do
+        IFS='|' read -r env short server <<< "$entry"
+        final_shorts_csv="${final_shorts_csv:+$final_shorts_csv,}$short"
+      done
+    else
+      local line short_only
+      final_shorts_csv=""
+      while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        short_only="${line%% *}"
+        final_shorts_csv="${final_shorts_csv:+$final_shorts_csv,}$short_only"
+      done <<< "$picked_raw"
+    fi
+  else
+    final_shorts_csv=""
+    for entry in "${MENU_CLUSTERS[@]}"; do
+      IFS='|' read -r env short server <<< "$entry"
+      final_shorts_csv="${final_shorts_csv:+$final_shorts_csv,}$short"
+    done
+  fi
+
+  local search_string=""
+  if [[ "$chosen_action" == "search" ]]; then
+    read -rp "Search string: " search_string
+    if [[ -z "$search_string" ]]; then
+      echo "ERROR: search string cannot be empty" >&2
+      exit 1
+    fi
+  fi
+
+  CLUSTER_FILTER="$final_shorts_csv"
+  ENV_FILTER="all"
+  PROJECT_FILTER=""
+  [[ "$projects_csv" != "all" ]] && PROJECT_FILTER="$projects_csv"
+  NAMESPACE_FILTER=""
+  OUTPUT_FILE=""
+  INSECURE=0
+
+  local display_cmd="oo.sh -a $chosen_action -c $final_shorts_csv"
+  [[ -n "$PROJECT_FILTER" ]] && display_cmd="$display_cmd -p $PROJECT_FILTER"
+  [[ -n "$search_string" ]] && display_cmd="$display_cmd \"$search_string\""
+
+  echo >&2
+  echo "About to run:" >&2
+  echo "  $display_cmd" >&2
+  echo "On these clusters:" >&2
+  resolve_clusters
+  for entry in "${RESOLVED_CLUSTERS[@]}"; do
+    split_cluster_entry "$entry"
+    printf '  %s (%s) - %s\n' "$CL_SHORT" "$CL_ENV" "$CL_SERVER" >&2
+  done
+  echo >&2
+
+  if ! menu_confirm "Proceed?"; then
+    echo "Cancelled." >&2
+    exit 0
+  fi
+
+  REMAINING_ARGS=()
+  [[ -n "$search_string" ]] && REMAINING_ARGS=("$search_string")
+
+  case "$chosen_action" in
+    quota) run_action_quota ;;
+    search) run_action_search ;;
+  esac
+}
