@@ -219,6 +219,14 @@ BADACTION_EXIT=$?
 assert_eq "$BADACTION_EXIT" "1" "exits non-zero for an unrecognized action"
 assert_contains "$(cat "$WORKDIR/bad.err")" "unknown action" "explains what's wrong"
 
+echo "=== oo.sh: works when invoked through a symlink from another directory ==="
+mkdir -p "$WORKDIR/elsewhere-bin"
+ln -sf "$WORKDIR/oo.sh" "$WORKDIR/elsewhere-bin/oo"
+"$WORKDIR/elsewhere-bin/oo" -a quota -c t1 -o "$WORKDIR/symlink-out.txt" <<< $'testpass\n' 2>"$WORKDIR/symlink-err.txt"
+SYMLINK_EXIT=$?
+assert_eq "$SYMLINK_EXIT" "0" "symlinked invocation still finds config.sh/lib and runs cleanly"
+assert_contains "$(cat "$WORKDIR/symlink-out.txt" 2>/dev/null)" "Grand totals across 1 cluster(s)" "symlinked run produces a real report, not a sourcing error"
+
 echo "=== oo.sh: -h exits 0 (not treated as an error) ==="
 printf '' | /bin/bash "$WORKDIR/oo.sh" -h >"$WORKDIR/help.out" 2>"$WORKDIR/help.err"
 HELP_EXIT=$?

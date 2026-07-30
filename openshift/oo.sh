@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve the real script location even when invoked through a symlink (e.g.
+# ~/bin/oo -> .../openshift/oo.sh), so config.sh/lib/ are still found relative
+# to the actual file, not the symlink's directory.
+oo_source="${BASH_SOURCE[0]}"
+while [[ -h "$oo_source" ]]; do
+  oo_dir="$(cd -P "$(dirname "$oo_source")" && pwd)"
+  oo_source="$(readlink "$oo_source")"
+  [[ "$oo_source" != /* ]] && oo_source="$oo_dir/$oo_source"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$oo_source")" && pwd)"
+unset oo_source oo_dir
 # shellcheck source=config.sh
 source "$SCRIPT_DIR/config.sh"
 # shellcheck source=lib/common.sh
