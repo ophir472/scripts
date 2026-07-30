@@ -15,17 +15,17 @@ quota_write_summary_header() {
 # (bytes for memory) for the caller to accumulate into cluster/grand totals.
 quota_collect_namespace() {
   local kubeconfig="$1" env="$2" short="$3" ns="$4" extended_file="$5" summary_file="$6"
-  local project quota_json describe_out quota_count
+  local project quota_json quota_count
 
   project=$(extract_project "$ns")
 
+  # Only "get -o json" -- "describe quota" was a second oc round-trip per
+  # namespace for the same data in a prettier format; the JSON already
+  # covers everything the summary/extended sections need.
   quota_json=$(oc --kubeconfig="$kubeconfig" get quota -n "$ns" -o json 2>/dev/null || echo '{"items":[]}')
-  describe_out=$(oc --kubeconfig="$kubeconfig" describe quota -n "$ns" 2>/dev/null || true)
   {
     echo "--- Namespace: $ns (project: ${project:-none}) ---"
     echo "$quota_json"
-    echo
-    echo "$describe_out"
     echo
   } >> "$extended_file"
 
@@ -46,7 +46,7 @@ quota_collect_namespace() {
     QUOTA_NS_CPU_USED=$(awk -v a="$QUOTA_NS_CPU_USED" -v b="$(parse_cpu "$cpu_used")" 'BEGIN{printf "%.3f", a+b}')
     QUOTA_NS_MEM_ALLOC=$(awk -v a="$QUOTA_NS_MEM_ALLOC" -v b="$(parse_memory_to_bytes "$mem_alloc")" 'BEGIN{printf "%.0f", a+b}')
     QUOTA_NS_MEM_USED=$(awk -v a="$QUOTA_NS_MEM_USED" -v b="$(parse_memory_to_bytes "$mem_used")" 'BEGIN{printf "%.0f", a+b}')
-  done < <(echo "$quota_json" | jq -r '.items[] | [(.spec.hard["requests.cpu"] // "0"), (.status.used["requests.cpu"] // "0"), (.spec.hard["requests.memory"] // "0"), (.status.used["requests.memory"] // "0")] | @tsv')
+  done < <(echo "$quota_json" | jq -r '.items[] | [(.spec.hard["limits.cpu"] // "0"), (.status.used["limits.cpu"] // "0"), (.spec.hard["limits.memory"] // "0"), (.status.used["limits.memory"] // "0")] | @tsv')
 
   printf '%-6s %-8s %-30s %-20s %-12s %-12s %-14s %-14s\n' "$env" "$short" "$ns" "${project:-none}" \
     "$QUOTA_NS_CPU_ALLOC" "$QUOTA_NS_CPU_USED" "$(human_bytes "$QUOTA_NS_MEM_ALLOC")" "$(human_bytes "$QUOTA_NS_MEM_USED")" >> "$summary_file"
@@ -70,6 +70,54 @@ quota_write_cluster_totals() {
       "$short" "$cpu_alloc" "$cpu_used" "$(human_bytes "$mem_alloc")" "$(human_bytes "$mem_used")"
     echo
   } >> "$summary_file"
+}
+
+# Runs the entire per-cluster quota workflow (login, resolve namespaces,
+# fetch quota per namespace, cluster totals) for one cluster. Meant to be
+# backgrounded (`quota_process_cluster ... &`) so many clusters run in
+# parallel -- everything it needs to hand back to the caller is written to
+# files under $out_prefix, since a background subshell's variables don't
+# propagate back to the parent process.
+#
+# Writes:
+#   $out_prefix.log       login/no-namespace-match messages (if any)
+#   $out_prefix.summary   per-namespace summary rows + cluster totals line
+#   $out_prefix.extended  raw quota JSON per namespace
+#   $out_prefix.totals    "cpu_alloc cpu_used mem_alloc mem_used ns_count logged_in short"
+quota_process_cluster() {
+  local entry="$1" out_prefix="$2"
+  split_cluster_entry "$entry"
+  local env="$CL_ENV" short="$CL_SHORT" server="$CL_SERVER"
+
+  if ! login_cluster "$server" "$env" "$INSECURE"; then
+    echo "[$short] login failed" >> "$out_prefix.log"
+    echo "0.000 0.000 0 0 0 0 $short" > "$out_prefix.totals"
+    return
+  fi
+  local kubeconfig="$LOGIN_KUBECONFIG"
+
+  resolve_namespaces "$kubeconfig"
+  if [[ ${#RESOLVED_NAMESPACES[@]} -eq 0 ]]; then
+    echo "[$short] no matching namespaces" >> "$out_prefix.log"
+    rm -f "$kubeconfig"
+    echo "0.000 0.000 0 0 0 1 $short" > "$out_prefix.totals"
+    return
+  fi
+
+  echo "===== Cluster: $short ($env) -- $server =====" >> "$out_prefix.extended"
+
+  local cluster_cpu_alloc=0 cluster_cpu_used=0 cluster_mem_alloc=0 cluster_mem_used=0
+  local ns
+  for ns in "${RESOLVED_NAMESPACES[@]}"; do
+    quota_collect_namespace "$kubeconfig" "$env" "$short" "$ns" "$out_prefix.extended" "$out_prefix.summary"
+    read -r cluster_cpu_alloc cluster_cpu_used cluster_mem_alloc cluster_mem_used <<< "$(quota_sum_totals \
+      "$cluster_cpu_alloc" "$cluster_cpu_used" "$cluster_mem_alloc" "$cluster_mem_used" \
+      "$QUOTA_NS_CPU_ALLOC" "$QUOTA_NS_CPU_USED" "$QUOTA_NS_MEM_ALLOC" "$QUOTA_NS_MEM_USED")"
+  done
+  quota_write_cluster_totals "$out_prefix.summary" "$short" "$cluster_cpu_alloc" "$cluster_cpu_used" "$cluster_mem_alloc" "$cluster_mem_used"
+  rm -f "$kubeconfig"
+
+  echo "$cluster_cpu_alloc $cluster_cpu_used $cluster_mem_alloc $cluster_mem_used ${#RESOLVED_NAMESPACES[@]} 1 $short" > "$out_prefix.totals"
 }
 
 quota_write_grand_totals() {

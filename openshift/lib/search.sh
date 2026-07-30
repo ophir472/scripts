@@ -13,3 +13,37 @@ search_collect_namespace() {
       fi
     done
 }
+
+# Runs the entire per-cluster search workflow (login, resolve namespaces,
+# search secrets) for one cluster. Meant to be backgrounded
+# (`search_process_cluster ... &`) so many clusters run in parallel -- writes
+# results to files under $out_prefix rather than returning via variables,
+# since a background subshell's variables don't propagate back to the parent.
+#
+# Writes:
+#   $out_prefix.log    login/no-namespace-match messages (if any)
+#   $out_prefix.found  "FOUND in [...]" lines, if any
+search_process_cluster() {
+  local entry="$1" out_prefix="$2" search_string="$3"
+  split_cluster_entry "$entry"
+  local env="$CL_ENV" short="$CL_SHORT" server="$CL_SERVER"
+
+  if ! login_cluster "$server" "$env" "$INSECURE"; then
+    echo "[$short] login failed" >> "$out_prefix.log"
+    return
+  fi
+  local kubeconfig="$LOGIN_KUBECONFIG"
+
+  resolve_namespaces "$kubeconfig"
+  if [[ ${#RESOLVED_NAMESPACES[@]} -eq 0 ]]; then
+    echo "[$short] no matching namespaces" >> "$out_prefix.log"
+    rm -f "$kubeconfig"
+    return
+  fi
+
+  local ns
+  for ns in "${RESOLVED_NAMESPACES[@]}"; do
+    search_collect_namespace "$kubeconfig" "$env" "$short" "$ns" "$search_string" >> "$out_prefix.found"
+  done
+  rm -f "$kubeconfig"
+}

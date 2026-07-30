@@ -5,6 +5,7 @@
 #   MOCK_QUOTA_CPU_ALLOC/USED, MOCK_QUOTA_MEM_ALLOC/USED
 #   MOCK_SECRET_NS, MOCK_SECRET_VALUE   which namespace holds a secret, and its plaintext value
 #   MOCK_LOGIN_FAIL_SERVERS space-separated substrings; `oc login` fails if --server matches one
+#   MOCK_EXPECTED_PASSWORD  if set, `oc login` fails unless --password matches exactly
 
 args=("$@")
 get_opt() {
@@ -22,11 +23,15 @@ joined=" $* "
 if [[ "$joined" == *" login "* ]]; then
   server=$(get_opt --server)
   kubeconfig=$(get_opt --kubeconfig)
+  password=$(get_opt --password)
   for pat in ${MOCK_LOGIN_FAIL_SERVERS:-}; do
     if [[ "$server" == *"$pat"* ]]; then
       exit 1
     fi
   done
+  if [[ -n "${MOCK_EXPECTED_PASSWORD:-}" && "$password" != "$MOCK_EXPECTED_PASSWORD" ]]; then
+    exit 1
+  fi
   echo "fake-login" > "$kubeconfig"
   exit 0
 fi
@@ -37,7 +42,7 @@ if [[ "$joined" == *" get projects "* ]]; then
 fi
 
 if [[ "$joined" == *" get quota "* ]]; then
-  printf '{"items":[{"spec":{"hard":{"requests.cpu":"%s","requests.memory":"%s"}},"status":{"used":{"requests.cpu":"%s","requests.memory":"%s"}}}]}' \
+  printf '{"items":[{"spec":{"hard":{"limits.cpu":"%s","limits.memory":"%s"}},"status":{"used":{"limits.cpu":"%s","limits.memory":"%s"}}}]}' \
     "${MOCK_QUOTA_CPU_ALLOC:-4}" "${MOCK_QUOTA_MEM_ALLOC:-8Gi}" "${MOCK_QUOTA_CPU_USED:-1500m}" "${MOCK_QUOTA_MEM_USED:-2Gi}"
   exit 0
 fi

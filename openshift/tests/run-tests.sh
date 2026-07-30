@@ -151,23 +151,52 @@ INTER_EXIT=$?
 assert_eq "$INTER_EXIT" "0" "interactive quota run exits cleanly"
 assert_contains "$(cat "$WORKDIR/ierr.txt")" "About to run:" "shows the equivalent command before executing"
 assert_contains "$(cat "$WORKDIR/ierr.txt")" "oo.sh -a quota -c t1,p1" "equivalent command reflects both clusters"
-REPORT_FILE=$(ls "$WORKDIR"/quota-report-*.txt 2>/dev/null | head -1)
+REPORT_FILE=$(ls "$WORKDIR"/output-*.txt 2>/dev/null | head -1)
 assert_contains "$([[ -n "$REPORT_FILE" ]] && cat "$REPORT_FILE")" "Grand totals across 2 cluster(s), 4 namespace(s):" "interactive run produced the same report a flag-driven run would"
-rm -f "$WORKDIR"/quota-report-*.txt
+rm -f "$WORKDIR"/output-*.txt
 
 echo "=== interactive menu: cancelling at the final confirm runs nothing ==="
 (cd "$WORKDIR" && printf '1\nall\nall\nn\nn\n' | /bin/bash "$WORKDIR/oo.sh" >"$WORKDIR/cout.txt" 2>"$WORKDIR/cerr.txt")
 CANCEL_EXIT=$?
 assert_eq "$CANCEL_EXIT" "0" "cancelling exits cleanly, not an error"
 assert_contains "$(cat "$WORKDIR/cerr.txt")" "Cancelled" "confirms the cancellation"
-CANCEL_REPORTS=$(ls "$WORKDIR"/quota-report-*.txt 2>/dev/null | wc -l | tr -d ' ')
+CANCEL_REPORTS=$(ls "$WORKDIR"/output-*.txt 2>/dev/null | wc -l | tr -d ' ')
 assert_eq "$CANCEL_REPORTS" "0" "no report written, no login attempted, when cancelled"
 
 echo "=== quota: login failure on one cluster doesn't stop the run ==="
-MOCK_LOGIN_FAIL_SERVERS="fake-dev" run_quota $'testpass\nprodpass\n' -e all
+# t1's server always fails login here, so the default-user's password
+# VERIFICATION step (which happens to pick t1 as its test cluster) also
+# exhausts its 3 attempts and warns -- that's expected; it should still not
+# block the real run, which then correctly skips t1 and processes p1.
+MOCK_LOGIN_FAIL_SERVERS="fake-dev" run_quota $'testpass1\ntestpass2\ntestpass3\nprodpass\n' -e all
 assert_eq "$QUOTA_EXIT" "0" "exits cleanly despite one login failure"
-assert_contains "$QUOTA_ERR" "[t1] login failed" "failed cluster reported"
+assert_contains "$QUOTA_ERR" "Proceeding anyway" "verification warns but doesn't block the run"
+assert_contains "$QUOTA_ERR" "[t1] login failed" "failed cluster reported in the real run"
 assert_contains "$QUOTA_OUT" "Grand totals across 1 cluster(s)" "the other cluster still gets processed"
+
+echo "=== password verification: retries on a mistyped password, succeeds on the 3rd try ==="
+MOCK_EXPECTED_PASSWORD="rightpass" run_quota $'wrongpass1\nwrongpass2\nrightpass\n' -c t1
+assert_eq "$QUOTA_EXIT" "0" "eventually succeeds"
+assert_contains "$QUOTA_ERR" "Login failed for testuser against t1" "reports the failed attempt(s)"
+assert_contains "$QUOTA_OUT" "Grand totals across 1 cluster(s)" "run proceeds once the right password is entered"
+
+echo "=== password verification: after 3 wrong attempts, warns and proceeds (doesn't hard-block) ==="
+# Deliberately doesn't hard-exit here: the test cluster could just be down
+# for unrelated reasons, and the real per-cluster loop below already reports
+# a login failure on its own -- so the run continues, and simply shows 0
+# clusters processed once the real attempt also fails with the same password.
+MOCK_EXPECTED_PASSWORD="rightpass" run_quota $'wrong1\nwrong2\nwrong3\n' -c t1
+assert_eq "$QUOTA_EXIT" "0" "does not hard-exit on repeated bad password"
+assert_contains "$QUOTA_ERR" "Login still failing for testuser against t1 after 3 attempts" "clear final warning"
+assert_contains "$QUOTA_ERR" "Proceeding anyway" "explains it's continuing rather than blocking"
+assert_contains "$QUOTA_ERR" "[t1] login failed" "the real run's own login attempt fails too, reported as usual"
+assert_contains "$QUOTA_OUT" "Grand totals across 0 cluster(s)" "no cluster actually got processed, but the run still completes and reports that clearly"
+
+echo "=== password verification: prod password is tested against a prod cluster ==="
+MOCK_EXPECTED_PASSWORD="testpass" run_quota $'testpass\nprodwrong\ntestpass\n' -e all
+assert_eq "$QUOTA_EXIT" "0" "eventually succeeds"
+assert_contains "$QUOTA_ERR" "Login failed for produser (prod) against p1" "prod password tested against the prod cluster specifically"
+assert_contains "$QUOTA_OUT" "Grand totals across 2 cluster(s)" "both clusters end up processed once both passwords are right"
 
 echo "=== search-string: finds a match ==="
 MOCK_SECRET_VALUE="super-secret-value" run_search $'testpass\nprodpass\n' -e all "super-secret-value"

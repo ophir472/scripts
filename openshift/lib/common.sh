@@ -79,8 +79,9 @@ extract_project() {
   fi
 }
 
-# Parses -a/-e/-c/-n/-p/-o/--insecure/-h. Leftover args (e.g. a search string)
-# land in REMAINING_ARGS for the caller to handle. Sets COMMON_HELP=1 on -h/--help.
+# Parses -a/-e/-c/-n/-p/-o/-j/--insecure/-h. Leftover args (e.g. a search
+# string) land in REMAINING_ARGS for the caller to handle. Sets
+# COMMON_HELP=1 on -h/--help.
 parse_common_args() {
   ACTION=""
   ENV_FILTER=""
@@ -89,6 +90,7 @@ parse_common_args() {
   PROJECT_FILTER=""
   OUTPUT_FILE=""
   DISCOVER_FILE=""
+  PARALLEL_JOBS=8
   INSECURE=0
   COMMON_HELP=0
   REMAINING_ARGS=()
@@ -101,6 +103,7 @@ parse_common_args() {
       -p|--project) PROJECT_FILTER="$2"; shift 2 ;;
       -o|--output) OUTPUT_FILE="$2"; shift 2 ;;
       -f|--file) DISCOVER_FILE="$2"; shift 2 ;;
+      -j|--parallel) PARALLEL_JOBS="$2"; shift 2 ;;
       --insecure) INSECURE=1; shift ;;
       -h|--help) COMMON_HELP=1; shift ;;
       *) REMAINING_ARGS+=("$1"); shift ;;
@@ -229,20 +232,59 @@ split_cluster_entry() {
   CL_SERVER="${rest#*:}"
 }
 
-# Prompts for whichever usernames RESOLVED_CLUSTERS actually needs. Sets
-# PASS_DEFAULT and/or PASS_PROD.
+# Prompts for whichever usernames RESOLVED_CLUSTERS actually needs, verifying
+# each by test-logging into one representative cluster before returning --
+# so a typo is caught immediately (up to 3 tries) instead of failing every
+# cluster that uses it. Sets PASS_DEFAULT and/or PASS_PROD.
 prompt_passwords() {
   local need_default=0 need_prod=0 entry
+  local default_test_entry="" prod_test_entry=""
   for entry in "${RESOLVED_CLUSTERS[@]}"; do
     split_cluster_entry "$entry"
-    if [[ "$CL_ENV" == "prod" ]]; then need_prod=1; else need_default=1; fi
+    if [[ "$CL_ENV" == "prod" ]]; then
+      need_prod=1
+      [[ -z "$prod_test_entry" ]] && prod_test_entry="$entry"
+    else
+      need_default=1
+      [[ -z "$default_test_entry" ]] && default_test_entry="$entry"
+    fi
   done
   if [[ $need_default -eq 1 ]]; then
-    read -rsp "Password for $USER_DEFAULT: " PASS_DEFAULT; echo
+    prompt_and_verify_password "$USER_DEFAULT" "$default_test_entry" PASS_DEFAULT
   fi
   if [[ $need_prod -eq 1 ]]; then
-    read -rsp "Password for $USER_PROD (prod): " PASS_PROD; echo
+    prompt_and_verify_password "$USER_PROD (prod)" "$prod_test_entry" PASS_PROD
   fi
+}
+
+# Prompts for a password (label $1), test-logs into cluster entry $2
+# ("env:short:server"), and assigns the typed password into variable $3 by
+# name (printf -v, not a nameref -- bash 3.2 has no "local -n"). Retries up
+# to 3 times on login failure. Deliberately never hard-exits here: the test
+# cluster itself could just be unreachable (unrelated to the password), and
+# the real per-cluster loop already handles login failures gracefully -- so
+# after 3 failed attempts this warns and lets the run proceed rather than
+# blocking every cluster over what might be one flaky test target.
+prompt_and_verify_password() {
+  local label="$1" test_entry="$2" varname="$3"
+  local attempt pass test_env test_short test_server
+  split_cluster_entry "$test_entry"
+  test_env="$CL_ENV"; test_short="$CL_SHORT"; test_server="$CL_SERVER"
+
+  for attempt in 1 2 3; do
+    read -rsp "Password for $label: " pass; echo
+    printf -v "$varname" '%s' "$pass"
+    if login_cluster "$test_server" "$test_env" "$INSECURE"; then
+      rm -f "$LOGIN_KUBECONFIG"
+      return 0
+    fi
+    if [[ $attempt -lt 3 ]]; then
+      echo "Login failed for $label against $test_short -- check your password. Try again ($((3 - attempt)) attempt(s) left)." >&2
+    else
+      echo "Login still failing for $label against $test_short after 3 attempts." >&2
+      echo "Proceeding anyway -- if this was really a wrong password, every cluster using it will fail below; if $test_short is just unreachable, the rest should still work." >&2
+    fi
+  done
 }
 
 # Logs into one cluster with an isolated temp kubeconfig (never touches the
@@ -265,6 +307,45 @@ login_cluster() {
     return 1
   fi
   return 0
+}
+
+# Runs "$worker_fn <cluster-entry> <work_dir>/<index> [extra_args...]" for
+# every entry in RESOLVED_CLUSTERS, in batches of $PARALLEL_JOBS run
+# concurrently as background jobs (bash 3.2 has no "wait -n", so this waits
+# for a whole batch at a time rather than replacing jobs as they finish --
+# simple and plenty for a handful of batches). The worker is expected to
+# write its results to files at that prefix (see quota_process_cluster /
+# search_process_cluster) since a backgrounded subshell's variables don't
+# propagate back to this process; the caller reads those files back after
+# this returns.
+run_clusters_parallel() {
+  local worker_fn="$1" work_dir="$2"
+  shift 2
+  local extra_args=("$@")
+  local jobs="$PARALLEL_JOBS"
+  [[ "$jobs" =~ ^[0-9]+$ && "$jobs" -ge 1 ]] || jobs=8
+
+  local total=${#RESOLVED_CLUSTERS[@]}
+  local idx=0 end i
+  local batch_pids
+  while [[ $idx -lt $total ]]; do
+    batch_pids=()
+    end=$((idx + jobs))
+    [[ $end -gt $total ]] && end=$total
+    for ((i = idx; i < end; i++)); do
+      # bash 3.2: expanding an empty array under `set -u` throws "unbound
+      # variable" (fixed only in bash 4.4+), so guard on length first rather
+      # than expanding "${extra_args[@]}" unconditionally.
+      if [[ ${#extra_args[@]} -gt 0 ]]; then
+        "$worker_fn" "${RESOLVED_CLUSTERS[$i]}" "$work_dir/$i" "${extra_args[@]}" &
+      else
+        "$worker_fn" "${RESOLVED_CLUSTERS[$i]}" "$work_dir/$i" &
+      fi
+      batch_pids+=("$!")
+    done
+    wait "${batch_pids[@]}"
+    idx=$end
+  done
 }
 
 # Populates RESOLVED_NAMESPACES from the accessible namespaces on $1 (a

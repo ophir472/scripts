@@ -124,8 +124,16 @@ and full cluster list → asks to confirm before logging into anything.
 | `-n namespace` | Target exact namespace name(s). Without `-c`, searches every selected cluster and reports wherever it's found. Comma-separated allowed. |
 | `-p project` | Only namespaces whose derived project matches. Comma-separated allowed. See **Project names** below. |
 | `--insecure` | Pass `--insecure-skip-tls-verify` to `oc login`. |
+| `-j N` | How many clusters to process concurrently (quota/search only). Default 8. |
 
 With no `-e`/`-c` at all, the default is everything (`-e all`).
+
+Clusters are independent (different servers/kubeconfigs), so `quota` and
+`search` process up to `-j` of them at once instead of one at a time — with
+dozens of clusters this is the difference between minutes and seconds. Each
+cluster still logs in exactly once, no matter how many namespaces it has;
+`-j` only controls how many *clusters* run concurrently, not namespaces
+within a cluster (those are already sequential and reuse the one login).
 
 ### Actions
 
@@ -136,12 +144,13 @@ With no `-e`/`-c` at all, the default is everything (`-e all`).
 ./oo.sh -a quota -e uat
 ./oo.sh -a quota -c pr1 -n checkout-prod-482913
 ./oo.sh -a quota -p checkout                    # this project, across ALL envs
+./oo.sh -a quota -j 15                          # up to 15 clusters at once (default 8)
 ```
 
-Writes one report file (default `./quota-report-<target>-<timestamp>.txt`,
-override with `-o`): a SUMMARY section (per-namespace rows, per-cluster
-subtotals, grand total) followed by an EXTENDED section (raw `oc get`/
-`describe quota` output per namespace).
+Writes one report file (default `./output-<timestamp>.txt`, override with
+`-o`): a SUMMARY section (per-namespace rows, per-cluster subtotals, grand
+total) followed by an EXTENDED section (raw `oc get quota` JSON per
+namespace).
 
 **`-a search <string>`** — searches base64-decoded secret values for a string.
 
@@ -199,6 +208,7 @@ oo -a quota -p checkout,billing                 # multiple projects at once
 oo -a quota -e uat -p checkout                  # "checkout" project, uat only
 oo -a quota -e prod --insecure                  # skip TLS verification on login
 oo -a quota -e uat -o ~/reports/uat-quota.txt   # custom output path
+oo -a quota -e all -j 20                        # dozens of clusters? crank up concurrency
 
 # Search
 
@@ -229,6 +239,17 @@ they're still included in `-e`/`-c` runs, just excluded from `-p` filtering.
 This is computed live from the actual namespace name every run — it's never
 read from `config.sh`, which only stores a discovery-time snapshot used to
 build the interactive menu's env/project choices.
+
+## Password verification
+
+Right after you type a password, it's tested against one representative
+cluster before the real run starts (dev/uat password against a non-prod
+cluster, prod password against a prod cluster). If that fails you get up to
+3 tries. This just catches a typo early — it never hard-blocks the run after
+3 failures (that one test cluster could simply be down for unrelated
+reasons), so a real bad password still surfaces normally as per-cluster
+"login failed" messages once the actual run starts, exactly as if
+verification wasn't there at all.
 
 ## Security notes
 

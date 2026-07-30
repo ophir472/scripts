@@ -170,6 +170,7 @@ interactive_run() {
   NAMESPACE_FILTER=""
   OUTPUT_FILE=""
   INSECURE=0
+  PARALLEL_JOBS="${PARALLEL_JOBS:-8}"
 
   local display_cmd="oo.sh -a $chosen_action -c $final_shorts_csv"
   [[ -n "$PROJECT_FILTER" ]] && display_cmd="$display_cmd -p $PROJECT_FILTER"
