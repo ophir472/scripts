@@ -4,6 +4,77 @@ One CLI (`oo.sh`) for working across many OpenShift clusters (dev/uat/prod) at
 once: check namespace quota, search secret values, or auto-discover clusters
 into config. No password is ever stored — you're prompted each run.
 
+## Requirements
+
+- `bash` (works fine on the stock 3.2 that ships with macOS — no need to
+  install a newer one)
+- `oc` (the OpenShift CLI), logged out is fine — `oo.sh` logs in itself
+- `jq`
+- `awk` (stock on macOS/Linux)
+
+Check you have them:
+
+```
+command -v oc jq awk
+```
+
+If `jq` is missing: `brew install jq` (macOS) or your distro's package
+manager on Linux.
+
+## Install
+
+There's nothing to build — it's plain shell scripts. Just make sure they're
+executable (they already are if you got this via git, since the executable
+bit is committed):
+
+```
+cd openshift
+chmod +x oo.sh lib/*.sh tests/*.sh tests/mock-oc
+./oo.sh -h        # sanity check
+```
+
+## Add `oo` to your PATH
+
+Pick one. All examples assume you're in the `openshift/` directory.
+
+**Option A — symlink into a directory already on PATH** (recommended, keeps
+the script in the repo so `git pull` updates it in place):
+
+```
+mkdir -p ~/bin
+ln -s "$(pwd)/oo.sh" ~/bin/oo
+```
+
+Then make sure `~/bin` is on PATH — add this to `~/.zshrc` (or `~/.bashrc`)
+if it isn't already:
+
+```
+export PATH="$HOME/bin:$PATH"
+```
+
+Reload your shell (`source ~/.zshrc`) and you can now run `oo` from anywhere:
+
+```
+oo -a quota -e uat
+```
+
+**Option B — add this directory to PATH directly:**
+
+```
+echo 'export PATH="'"$(pwd)"':$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Since the file is named `oo.sh`, you'd invoke it as `oo.sh -a quota` (rename
+to `oo` first, or symlink as in Option A, if you want the bare `oo` command).
+
+**Option C — alias, no PATH changes:**
+
+```
+echo "alias oo='$(pwd)/oo.sh'" >> ~/.zshrc
+source ~/.zshrc
+```
+
 ## Setup
 
 Everything lives in `config.sh`:
@@ -107,6 +178,45 @@ a partial identifier list will silently drop clusters that aren't in this
 run's successful set. The old file is backed up first, so recovery is
 possible via the `.bak` file, but it's not automatic — always check the
 "Skipped (login failed)" line in the output.
+
+## More examples
+
+Assuming `oo` is on your PATH (see **Add oo to your PATH** above; use
+`./oo.sh` instead if not):
+
+```sh
+# Quota
+
+oo -a quota                                    # every cluster, every namespace
+oo -a quota -e dev                             # just the dev env
+oo -a quota -e dev,uat                         # dev and uat, comma-separated
+oo -a quota -c pr1                              # one specific cluster, all its namespaces
+oo -a quota -c pr1,pr2                          # several specific clusters
+oo -a quota -c pr1 -n checkout-prod-482913      # one namespace on one cluster
+oo -a quota -n checkout-prod-482913             # that namespace, searched on every cluster
+oo -a quota -p checkout                         # "checkout" project, across ALL envs
+oo -a quota -p checkout,billing                 # multiple projects at once
+oo -a quota -e uat -p checkout                  # "checkout" project, uat only
+oo -a quota -e prod --insecure                  # skip TLS verification on login
+oo -a quota -e uat -o ~/reports/uat-quota.txt   # custom output path
+
+# Search
+
+oo -a search -e uat "some-secret-value"
+oo -a search -c pr1 "api-key-1234"
+oo -a search -p checkout "db-password"          # only checkout-project namespaces
+oo -a search -e all "leaked-credential"         # every cluster, every namespace
+
+# Discover (rebuild config.sh)
+
+oo -a discover -f cluster-ids.txt
+oo -a discover -f cluster-ids.txt --insecure
+oo -a discover -f cluster-ids.txt -o /tmp/preview-config.sh   # dry-run to a scratch file first
+
+# Interactive (no flags)
+
+oo
+```
 
 ## Project names
 

@@ -219,6 +219,12 @@ BADACTION_EXIT=$?
 assert_eq "$BADACTION_EXIT" "1" "exits non-zero for an unrecognized action"
 assert_contains "$(cat "$WORKDIR/bad.err")" "unknown action" "explains what's wrong"
 
+echo "=== oo.sh: -h exits 0 (not treated as an error) ==="
+printf '' | /bin/bash "$WORKDIR/oo.sh" -h >"$WORKDIR/help.out" 2>"$WORKDIR/help.err"
+HELP_EXIT=$?
+assert_eq "$HELP_EXIT" "0" "-h exits cleanly, unlike a real usage error"
+assert_contains "$(cat "$WORKDIR/help.out")" "Usage:" "help text printed"
+
 echo
 echo "=== Results: $PASS passed, $FAIL failed ==="
 [[ $FAIL -eq 0 ]]

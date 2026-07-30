@@ -57,7 +57,7 @@ Examples:
   $(basename "$0") -a search -c pr1 -n checkout-prod-482913 "api-key"
   $(basename "$0") -a discover -f cluster-ids.txt
 EOF
-  exit 1
+  exit "${1:-1}"
 }
 
 run_action_quota() {
@@ -185,7 +185,7 @@ if [[ $# -eq 0 ]]; then
 fi
 
 parse_common_args "$@"
-[[ "$COMMON_HELP" -eq 1 ]] && usage
+[[ "$COMMON_HELP" -eq 1 ]] && usage 0
 
 case "$ACTION" in
   quota) run_action_quota ;;
