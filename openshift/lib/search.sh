@@ -28,10 +28,14 @@ search_process_cluster() {
   split_cluster_entry "$entry"
   local env="$CL_ENV" short="$CL_SHORT" server="$CL_SERVER"
 
+  log_activity LOGIN "Logging into $short ($env)..."
+  log_cmd "oc login --server $server --username <user> --password ***"
   if ! login_cluster "$server" "$env" "$INSECURE"; then
     echo "[$short] login failed" >> "$out_prefix.log"
+    log_activity ERROR "Login failed for $short"
     return
   fi
+  log_activity LOGIN "Logged into $short"
   local kubeconfig="$LOGIN_KUBECONFIG"
 
   resolve_namespaces "$kubeconfig"
@@ -43,7 +47,9 @@ search_process_cluster() {
 
   local ns
   for ns in "${RESOLVED_NAMESPACES[@]}"; do
+    log_cmd "oc get secrets -n $ns -o json"
     search_collect_namespace "$kubeconfig" "$env" "$short" "$ns" "$search_string" >> "$out_prefix.found"
+    log_activity SEARCH "Searched $short/$ns"
   done
   rm -f "$kubeconfig"
 }

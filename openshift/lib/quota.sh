@@ -89,11 +89,15 @@ quota_process_cluster() {
   split_cluster_entry "$entry"
   local env="$CL_ENV" short="$CL_SHORT" server="$CL_SERVER"
 
+  log_activity LOGIN "Logging into $short ($env)..."
+  log_cmd "oc login --server $server --username <user> --password ***"
   if ! login_cluster "$server" "$env" "$INSECURE"; then
     echo "[$short] login failed" >> "$out_prefix.log"
+    log_activity ERROR "Login failed for $short"
     echo "0.000 0.000 0 0 0 0 $short" > "$out_prefix.totals"
     return
   fi
+  log_activity LOGIN "Logged into $short"
   local kubeconfig="$LOGIN_KUBECONFIG"
 
   resolve_namespaces "$kubeconfig"
@@ -109,7 +113,9 @@ quota_process_cluster() {
   local cluster_cpu_alloc=0 cluster_cpu_used=0 cluster_mem_alloc=0 cluster_mem_used=0
   local ns
   for ns in "${RESOLVED_NAMESPACES[@]}"; do
+    log_cmd "oc get quota -n $ns -o json"
     quota_collect_namespace "$kubeconfig" "$env" "$short" "$ns" "$out_prefix.extended" "$out_prefix.summary"
+    log_activity QUOTA "Got quota for $short/$ns"
     read -r cluster_cpu_alloc cluster_cpu_used cluster_mem_alloc cluster_mem_used <<< "$(quota_sum_totals \
       "$cluster_cpu_alloc" "$cluster_cpu_used" "$cluster_mem_alloc" "$cluster_mem_used" \
       "$QUOTA_NS_CPU_ALLOC" "$QUOTA_NS_CPU_USED" "$QUOTA_NS_MEM_ALLOC" "$QUOTA_NS_MEM_USED")"

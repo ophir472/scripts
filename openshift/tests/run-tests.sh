@@ -149,8 +149,10 @@ echo "=== interactive menu: full quota flow end to end (no CLI flags at all) ===
 (cd "$WORKDIR" && printf '1\nall\nall\nn\ny\ntestpass\nprodpass\n' | /bin/bash "$WORKDIR/oo.sh" 2>"$WORKDIR/ierr.txt")
 INTER_EXIT=$?
 assert_eq "$INTER_EXIT" "0" "interactive quota run exits cleanly"
-assert_contains "$(cat "$WORKDIR/ierr.txt")" "About to run:" "shows the equivalent command before executing"
-assert_contains "$(cat "$WORKDIR/ierr.txt")" "oo.sh -a quota -c t1,p1" "equivalent command reflects both clusters"
+assert_contains "$(cat "$WORKDIR/ierr.txt")" "About to run, for each of the 2 cluster(s) below:" "shows the real oc commands, not the oo.sh invocation"
+assert_contains "$(cat "$WORKDIR/ierr.txt")" "oc login --server" "shows the real oc login command"
+assert_contains "$(cat "$WORKDIR/ierr.txt")" "--password ***" "password is masked, never shown in the clear"
+assert_contains "$(cat "$WORKDIR/ierr.txt")" "oc get quota -n <namespace> -o json" "shows the per-namespace command as a template"
 REPORT_FILE=$(ls "$WORKDIR"/output-*.txt 2>/dev/null | head -1)
 assert_contains "$([[ -n "$REPORT_FILE" ]] && cat "$REPORT_FILE")" "Grand totals across 2 cluster(s), 4 namespace(s):" "interactive run produced the same report a flag-driven run would"
 rm -f "$WORKDIR"/output-*.txt
@@ -228,6 +230,27 @@ fi
 assert_contains "$DISCOVERED_CLUSTERS_DUMP" "uat|abc12345u|https://api.clusterabc12345u.example.com|" "uat cluster row written with correct URL"
 assert_contains "$DISCOVERED_CLUSTERS_DUMP" "dev|xyz67890d|https://api.clusterxyz67890d.example.com|" "dev cluster row written with correct URL"
 assert_contains "$DISCOVERED_CLUSTERS_DUMP" "|checkout" "project column populated from a real namespace"
+
+echo "=== discover: warns when a currently-configured cluster isn't reproduced ==="
+# The fixture config.sh has t1/p1; this run's identifier file finds
+# abc12345u/xyz67890d instead -- neither t1 nor p1 is reproduced, so both
+# should be flagged as about to be dropped.
+assert_contains "$DISCOVER_ERR" "WARNING: these clusters are in the current config but weren't reproduced" "warns about the drop"
+assert_contains "$DISCOVER_ERR" "t1" "t1 specifically named as disappearing"
+assert_contains "$DISCOVER_ERR" "p1" "p1 specifically named as disappearing"
+
+echo "=== discover: no warning when the rediscovered set fully covers the current config ==="
+cat > "$WORKDIR/config.sh" <<'EOF'
+CLUSTERS=(
+  "uat|abc12345u|https://api.clusterabc12345u.example.com|old-namespace-000000|"
+)
+USER_DEFAULT="testuser"
+USER_PROD="produser"
+DISCOVERY_DOMAIN="example.com"
+EOF
+run_discover $'testpass\nprodpass\n' -f "$TESTS_DIR/fixtures/cluster-ids.txt" -o "$WORKDIR/discovered-config.sh"
+assert_not_contains "$DISCOVER_ERR" "WARNING" "no warning when every existing cluster is reproduced"
+cp "$TESTS_DIR/fixtures/config.sh" "$WORKDIR/config.sh"
 
 echo "=== discover: backs up an existing target file instead of clobbering it ==="
 echo "# pre-existing config" > "$WORKDIR/discovered-config.sh"

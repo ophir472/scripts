@@ -199,21 +199,64 @@ already reports login failures gracefully on its own, so a genuinely wrong
 password still surfaces normally once the actual run starts — verification
 only exists to catch the common case (a typo) early, not to gate the run.
 
-## Known unresolved gap: discovery fully replaces, never merges
+## Activity log / live tail (`lib/ui.sh`): shared file, not shared screen
 
-`oo.sh -a discover` regenerates the entire `CLUSTERS` array from only what
-it successfully logs into *this run*. A mistyped password (dropping an
-entire env) or running with a partial identifier list silently drops
-clusters that aren't in this run's successful set — the old file is backed
-up first, but nothing merges automatically. This was flagged to the user as
-a design gap with a proposed fix (merge mode: keep existing rows for any
-cluster that fails login or isn't in this run's input, default to merge
-rather than replace) but not yet implemented — check with the user before
-assuming which behavior is wanted if this comes up again.
+`-l quiet|normal|verbose` and the live progress display are built around one
+idea: **workers never touch the terminal directly**. Every worker
+(`quota_process_cluster`, `search_process_cluster`, run sequentially or in
+parallel batches) appends short lines to one shared `$ACTIVITY_LOG` file via
+`log_activity KIND message` (`lib/ui.sh`) — a single small `>>` write per
+call, which is atomic enough on a normal filesystem that concurrent parallel
+workers can't corrupt each other's lines without any locking. Only the
+*main* process ever renders anything: `ui_start_live_tail` runs a plain
+`tail -n 15 -f` on that file, once, only when stderr is a real terminal and
+`LOG_LEVEL != quiet`. This is why it's safe under parallelization — there's
+no hand-rolled cursor-redraw code to fight over screen position between
+concurrent processes; `tail -f` already handles "show last N then follow"
+correctly on its own.
+
+`log_activity`'s `KIND` controls color (LOGIN=green, ERROR=red, CMD=dim,
+everything else=yellow) but only the `[KIND]` tag is colored, not the whole
+line — deliberate, per explicit user preference for something calmer than a
+wall of colored text. `log_cmd` (echoes the literal `oc` command about to
+run, password always masked as `***`) only fires at `verbose`.
+
+Two `set -e` bugs shipped in this file before landing: `ui_stop_live_tail`
+called `wait "$pid"` unconditionally even when `$pid` was empty (no tty, no
+tail started) — `wait ''` is invalid and aborts the whole script as a bare
+statement. Guard any use of a "maybe-empty PID" the same way `[[ -n "$pid" ]]
+&& { kill ...; wait ...; }`, never call `wait` on a variable that might be
+empty. If you add a new `log_activity` call site, no special care needed
+there — it's `[[ ... ]] && return 0`-guarded internally and safe.
+
+The interactive menu's pre-run confirmation (`lib/menu.sh`) shows the actual
+`oc login`/`oc get projects`/`oc get quota`|`get secrets` commands (password
+masked) instead of an `oo.sh -a ...` invocation — using the *first* matched
+cluster as a representative example, since the exact per-namespace command
+list isn't knowable before login. Don't try to enumerate every cluster's
+exact commands here; the cluster list itself is already shown separately
+right below it.
+
+## Discovery fully replaces, never merges -- by decision, not oversight
+
+`oo.sh -a discover` regenerates the entire `CLUSTERS` array from only what it
+successfully logs into *this run*; a mistyped password or a partial
+identifier list drops clusters that aren't in this run's successful set. This
+was flagged as a design gap with a proposed merge-mode fix; the user's
+decision was explicitly **keep full-replace, don't merge, but warn** — so
+`run_action_discover` (`lib/discover.sh`) compares the currently-loaded
+`CLUSTERS` (already in memory from `config.sh` at startup, not re-read from
+disk) against the short names that actually end up in `new_rows`, and prints
+`WARNING: ... will be dropped: <shorts>` (stderr) for anything about to
+disappear -- whether that cluster failed login, had zero namespaces, or was
+simply left out of the input file, since all three cases result in it being
+absent from the written file either way. Don't build a merge mode without
+checking first — this was a deliberate choice, not something waiting to be
+finished.
 
 ## Before considering any change to lib/*.sh or oo.sh done
 
-Run `/bin/bash tests/run-tests.sh` (72 assertions as of this writing, mock
+Run `/bin/bash tests/run-tests.sh` (78 assertions as of this writing, mock
 `oc`, no real cluster/credentials needed) and confirm it's still green. It
 covers CLI targeting/comma-lists, project-name extraction edge cases,
 discovery parsing (including the sit-dismissed and unknown-suffix paths),

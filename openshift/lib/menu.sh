@@ -171,16 +171,29 @@ interactive_run() {
   OUTPUT_FILE=""
   INSECURE=0
   PARALLEL_JOBS="${PARALLEL_JOBS:-8}"
+  LOG_LEVEL="${LOG_LEVEL:-normal}"
 
-  local display_cmd="oo.sh -a $chosen_action -c $final_shorts_csv"
-  [[ -n "$PROJECT_FILTER" ]] && display_cmd="$display_cmd -p $PROJECT_FILTER"
-  [[ -n "$search_string" ]] && display_cmd="$display_cmd \"$search_string\""
+  resolve_clusters
+
+  # Show the actual oc commands that will run, not the oo.sh invocation --
+  # a representative example (using the first matched cluster), since the
+  # exact namespace list per cluster isn't known until after login.
+  local example_entry="${RESOLVED_CLUSTERS[0]}" example_user
+  split_cluster_entry "$example_entry"
+  example_user="$USER_DEFAULT"
+  [[ "$CL_ENV" == "prod" ]] && example_user="$USER_PROD"
 
   echo >&2
-  echo "About to run:" >&2
-  echo "  $display_cmd" >&2
+  echo "About to run, for each of the ${#RESOLVED_CLUSTERS[@]} cluster(s) below:" >&2
+  printf '  oc login --server %s --username %s --password ***\n' "$CL_SERVER" "$example_user" >&2
+  echo "  oc get projects -o jsonpath='{.items[*].metadata.name}'" >&2
+  if [[ "$chosen_action" == "quota" ]]; then
+    echo "  oc get quota -n <namespace> -o json    # once per matching namespace" >&2
+  else
+    echo "  oc get secrets -n <namespace> -o json  # once per matching namespace" >&2
+    echo "  Searching for: \"$search_string\"" >&2
+  fi
   echo "On these clusters:" >&2
-  resolve_clusters
   for entry in "${RESOLVED_CLUSTERS[@]}"; do
     split_cluster_entry "$entry"
     printf '  %s (%s) - %s\n' "$CL_SHORT" "$CL_ENV" "$CL_SERVER" >&2

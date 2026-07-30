@@ -107,6 +107,32 @@ run_action_discover() {
     rm -f "$kubeconfig"
   done
 
+  # Warn about any cluster (by short name) in the currently-loaded config
+  # that this run didn't reproduce -- discovery always fully replaces
+  # CLUSTERS, it doesn't merge, so anything not found here is about to
+  # disappear from the file (whether it failed login, had zero namespaces,
+  # or was simply left out of this run's identifier list).
+  local old_shorts="" cfg_entry new_shorts="" row_short row_entry
+  for cfg_entry in "${CLUSTERS[@]}"; do
+    split_config_entry "$cfg_entry"
+    csv_contains "$old_shorts" "$CFG_SHORT" || old_shorts="${old_shorts:+$old_shorts,}$CFG_SHORT"
+  done
+  for row_entry in "${new_rows[@]}"; do
+    IFS='|' read -r _ row_short _ _ _ <<< "$row_entry"
+    csv_contains "$new_shorts" "$row_short" || new_shorts="${new_shorts:+$new_shorts,}$row_short"
+  done
+  local -a disappearing=()
+  local check_short
+  if [[ -n "$old_shorts" ]]; then
+    local IFS=','
+    for check_short in $old_shorts; do
+      csv_contains "$new_shorts" "$check_short" || disappearing+=("$check_short")
+    done
+  fi
+  if [[ ${#disappearing[@]} -gt 0 ]]; then
+    echo "WARNING: these clusters are in the current config but weren't reproduced by this run and will be dropped: ${disappearing[*]}" >&2
+  fi
+
   if [[ ${#new_rows[@]} -eq 0 ]]; then
     echo "ERROR: logged into 0 clusters successfully; config.sh left untouched" >&2
     [[ ${#skipped_login[@]} -gt 0 ]] && printf '  login failed: %s\n' "${skipped_login[@]}" >&2

@@ -79,7 +79,7 @@ extract_project() {
   fi
 }
 
-# Parses -a/-e/-c/-n/-p/-o/-j/--insecure/-h. Leftover args (e.g. a search
+# Parses -a/-e/-c/-n/-p/-o/-j/-l/--insecure/-h. Leftover args (e.g. a search
 # string) land in REMAINING_ARGS for the caller to handle. Sets
 # COMMON_HELP=1 on -h/--help.
 parse_common_args() {
@@ -91,6 +91,7 @@ parse_common_args() {
   OUTPUT_FILE=""
   DISCOVER_FILE=""
   PARALLEL_JOBS=8
+  LOG_LEVEL="normal"
   INSECURE=0
   COMMON_HELP=0
   REMAINING_ARGS=()
@@ -104,11 +105,16 @@ parse_common_args() {
       -o|--output) OUTPUT_FILE="$2"; shift 2 ;;
       -f|--file) DISCOVER_FILE="$2"; shift 2 ;;
       -j|--parallel) PARALLEL_JOBS="$2"; shift 2 ;;
+      -l|--log-level) LOG_LEVEL="$2"; shift 2 ;;
       --insecure) INSECURE=1; shift ;;
       -h|--help) COMMON_HELP=1; shift ;;
       *) REMAINING_ARGS+=("$1"); shift ;;
     esac
   done
+  case "$LOG_LEVEL" in
+    quiet|normal|verbose) ;;
+    *) echo "ERROR: -l/--log-level must be quiet, normal, or verbose (got '$LOG_LEVEL')" >&2; exit 1 ;;
+  esac
   # No -e and no -c means "everything" (matches "-n alone searches everywhere").
   if [[ -z "$ENV_FILTER" && -z "$CLUSTER_FILTER" ]]; then
     ENV_FILTER="all"

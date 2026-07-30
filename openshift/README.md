@@ -180,13 +180,14 @@ dismissed, anything else is skipped with a warning), the digits right before
 it plus the 3 letters before *those* become the short name (`abc12345u`). The
 server URL is `https://api.<full identifier>.<DISCOVERY_DOMAIN>`.
 
-**Known limitation**: discovery always *fully replaces* `CLUSTERS` from
-whatever it successfully logs into this run — it does not merge with the
-existing config. A mistyped password (dropping an entire env) or running with
-a partial identifier list will silently drop clusters that aren't in this
-run's successful set. The old file is backed up first, so recovery is
-possible via the `.bak` file, but it's not automatic — always check the
-"Skipped (login failed)" line in the output.
+**By design, discovery always *fully replaces* `CLUSTERS`** from whatever it
+successfully logs into this run — it does not merge with the existing config.
+A mistyped password (dropping an entire env) or running with a partial
+identifier list will drop clusters that aren't in this run's successful set.
+The old file is always backed up first, and discovery also prints a
+`WARNING:` (to stderr) listing any cluster from the current config that
+wasn't reproduced this run — so you're told exactly what's about to
+disappear before it happens, even though nothing merges automatically.
 
 ## More examples
 
