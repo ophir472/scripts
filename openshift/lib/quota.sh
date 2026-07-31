@@ -91,7 +91,7 @@ quota_process_cluster() {
 
   log_activity LOGIN "Logging into $short ($env)..."
   log_cmd "oc login --server $server --username <user> --password ***"
-  if ! login_cluster "$server" "$env" "$INSECURE"; then
+  if ! login_cluster_or_reuse "$server" "$env" "$short" "$INSECURE"; then
     echo "[$short] login failed" >> "$out_prefix.log"
     log_activity ERROR "Login failed for $short"
     echo "0.000 0.000 0 0 0 0 $short" > "$out_prefix.totals"

@@ -242,6 +242,12 @@ split_cluster_entry() {
 # each by test-logging into one representative cluster before returning --
 # so a typo is caught immediately (up to 3 tries) instead of failing every
 # cluster that uses it. Sets PASS_DEFAULT and/or PASS_PROD.
+#
+# The verification login itself is kept, not discarded: VERIFIED_DEFAULT_SHORT
+# / VERIFIED_DEFAULT_KUBECONFIG (and the _PROD_ equivalents) record which
+# cluster was tested and its already-authenticated kubeconfig, so that when
+# the real run gets to that same cluster it reuses this session instead of
+# logging in a second time. See login_cluster_or_reuse.
 prompt_passwords() {
   local need_default=0 need_prod=0 entry
   local default_test_entry="" prod_test_entry=""
@@ -255,11 +261,13 @@ prompt_passwords() {
       [[ -z "$default_test_entry" ]] && default_test_entry="$entry"
     fi
   done
+  VERIFIED_DEFAULT_SHORT=""; VERIFIED_DEFAULT_KUBECONFIG=""
+  VERIFIED_PROD_SHORT=""; VERIFIED_PROD_KUBECONFIG=""
   if [[ $need_default -eq 1 ]]; then
-    prompt_and_verify_password "$USER_DEFAULT" "$default_test_entry" PASS_DEFAULT
+    prompt_and_verify_password "$USER_DEFAULT" "$default_test_entry" PASS_DEFAULT VERIFIED_DEFAULT_SHORT VERIFIED_DEFAULT_KUBECONFIG
   fi
   if [[ $need_prod -eq 1 ]]; then
-    prompt_and_verify_password "$USER_PROD (prod)" "$prod_test_entry" PASS_PROD
+    prompt_and_verify_password "$USER_PROD (prod)" "$prod_test_entry" PASS_PROD VERIFIED_PROD_SHORT VERIFIED_PROD_KUBECONFIG
   fi
 }
 
@@ -271,8 +279,13 @@ prompt_passwords() {
 # the real per-cluster loop already handles login failures gracefully -- so
 # after 3 failed attempts this warns and lets the run proceed rather than
 # blocking every cluster over what might be one flaky test target.
+#
+# On success, records the test cluster's short name and its already-logged-in
+# kubeconfig into variables $4/$5 (by name) instead of discarding them -- the
+# real run reuses this via login_cluster_or_reuse rather than logging in
+# twice to the same cluster.
 prompt_and_verify_password() {
-  local label="$1" test_entry="$2" varname="$3"
+  local label="$1" test_entry="$2" varname="$3" short_var="$4" kubeconfig_var="$5"
   local attempt pass test_env test_short test_server
   split_cluster_entry "$test_entry"
   test_env="$CL_ENV"; test_short="$CL_SHORT"; test_server="$CL_SERVER"
@@ -281,7 +294,8 @@ prompt_and_verify_password() {
     read -rsp "Password for $label: " pass; echo
     printf -v "$varname" '%s' "$pass"
     if login_cluster "$test_server" "$test_env" "$INSECURE"; then
-      rm -f "$LOGIN_KUBECONFIG"
+      printf -v "$short_var" '%s' "$test_short"
+      printf -v "$kubeconfig_var" '%s' "$LOGIN_KUBECONFIG"
       return 0
     fi
     if [[ $attempt -lt 3 ]]; then
@@ -311,6 +325,50 @@ login_cluster() {
     rm -f "$LOGIN_KUBECONFIG"
     LOGIN_KUBECONFIG=""
     return 1
+  fi
+  return 0
+}
+
+# Like login_cluster, but first checks whether $3 (short name) is the cluster
+# prompt_passwords already test-logged into (VERIFIED_DEFAULT_SHORT/
+# VERIFIED_PROD_SHORT) -- if so, reuses that already-authenticated
+# kubeconfig (a fresh copy, so the caller can freely rm it) instead of
+# logging in again. Sets LOGIN_KUBECONFIG and returns 0/1 exactly like
+# login_cluster, so every call site can use this as a drop-in replacement.
+login_cluster_or_reuse() {
+  local server="$1" env="$2" short="$3" insecure="$4"
+
+  if [[ -n "${VERIFIED_DEFAULT_SHORT:-}" && "$short" == "$VERIFIED_DEFAULT_SHORT" \
+        && -f "${VERIFIED_DEFAULT_KUBECONFIG:-}" ]]; then
+    LOGIN_KUBECONFIG=$(mktemp)
+    cp "$VERIFIED_DEFAULT_KUBECONFIG" "$LOGIN_KUBECONFIG"
+    log_activity LOGIN "Reusing verified login for $short (already authenticated during password check)"
+    return 0
+  fi
+  if [[ -n "${VERIFIED_PROD_SHORT:-}" && "$short" == "$VERIFIED_PROD_SHORT" \
+        && -f "${VERIFIED_PROD_KUBECONFIG:-}" ]]; then
+    LOGIN_KUBECONFIG=$(mktemp)
+    cp "$VERIFIED_PROD_KUBECONFIG" "$LOGIN_KUBECONFIG"
+    log_activity LOGIN "Reusing verified login for $short (already authenticated during password check)"
+    return 0
+  fi
+
+  login_cluster "$server" "$env" "$insecure"
+}
+
+# Moves any verified kubeconfig(s) from prompt_passwords into directory $1
+# (which the caller already arranged to clean up, e.g. a work_dir with its
+# own EXIT trap), updating VERIFIED_*_KUBECONFIG to the new path. Needed
+# because prompt_passwords runs before any work_dir exists to hold them.
+relocate_verified_kubeconfigs() {
+  local dir="$1"
+  if [[ -n "${VERIFIED_DEFAULT_KUBECONFIG:-}" && -f "$VERIFIED_DEFAULT_KUBECONFIG" ]]; then
+    mv "$VERIFIED_DEFAULT_KUBECONFIG" "$dir/verified-default.kubeconfig"
+    VERIFIED_DEFAULT_KUBECONFIG="$dir/verified-default.kubeconfig"
+  fi
+  if [[ -n "${VERIFIED_PROD_KUBECONFIG:-}" && -f "$VERIFIED_PROD_KUBECONFIG" ]]; then
+    mv "$VERIFIED_PROD_KUBECONFIG" "$dir/verified-prod.kubeconfig"
+    VERIFIED_PROD_KUBECONFIG="$dir/verified-prod.kubeconfig"
   fi
   return 0
 }

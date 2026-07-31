@@ -199,6 +199,29 @@ already reports login failures gracefully on its own, so a genuinely wrong
 password still surfaces normally once the actual run starts — verification
 only exists to catch the common case (a typo) early, not to gate the run.
 
+**The verification login is reused, not thrown away.** `prompt_and_verify_password`
+now records the tested cluster's short name and its already-authenticated
+kubeconfig (`VERIFIED_DEFAULT_SHORT`/`VERIFIED_DEFAULT_KUBECONFIG`, and the
+`_PROD_` equivalents) instead of `rm -f`-ing it. `login_cluster_or_reuse`
+(`lib/common.sh`) is a drop-in replacement for `login_cluster` used by every
+call site (`quota_process_cluster`, `search_process_cluster`,
+`run_action_discover`'s login loop) — same signature plus `$short`, same
+`LOGIN_KUBECONFIG`/return-code contract — that checks whether `$short`
+matches a verified slot first; if so it copies that kubeconfig (a fresh copy
+each time, so the caller can freely `rm` it) instead of hitting the network
+again. This matters most for `-e all`-style runs where the verification
+cluster is very likely also one of the clusters actually being processed —
+without this, that one cluster silently logged in twice.
+
+Since `prompt_passwords` runs *before* any `work_dir` exists (quota/search/
+discover all create theirs afterward), the verified kubeconfig starts as a
+bare `mktemp` file with no owner to clean it up. `relocate_verified_kubeconfigs`
+(`lib/common.sh`) moves it into the work_dir right after that's created,
+updating `VERIFIED_*_KUBECONFIG` to the new path -- so the existing
+`trap "rm -rf '$work_dir'" EXIT` cleans it up automatically. Call this once,
+right after creating `work_dir`, in any new action that calls
+`prompt_passwords`.
+
 ## Activity log / live tail (`lib/ui.sh`): shared file, not shared screen
 
 `-l quiet|normal|verbose` and the live progress display are built around one
@@ -214,6 +237,27 @@ workers can't corrupt each other's lines without any locking. Only the
 no hand-rolled cursor-redraw code to fight over screen position between
 concurrent processes; `tail -f` already handles "show last N then follow"
 correctly on its own.
+
+**`ui_stop_live_tail` dumps the log if it was never live-displayed.** If
+`UI_TAIL_PID` was never set (not a real terminal -- piped, redirected,
+automation, or any non-interactive invocation), `ui_stop_live_tail` `cat`s
+the whole `$ACTIVITY_LOG` to stderr once the action finishes, instead of
+just letting it vanish when `work_dir` gets cleaned up. This was added
+because discovery originally had *zero* `log_activity` calls and the user
+had no visibility into whether it was doing anything; once logging was
+added, it turned out the live-tail-only design meant a non-tty invocation
+(also common for quota/search) would still see nothing extra beyond the
+final result. Don't remove this fallback thinking the tty-only path is
+sufficient — it isn't, for exactly this reason.
+
+`run_action_discover` (`lib/discover.sh`) sets up its own `ACTIVITY_LOG` +
+`work_dir` + `ui_start_live_tail`/`ui_stop_live_tail`, same pattern as
+`run_action_quota`/`run_action_search` in `oo.sh` -- but discovery isn't
+parallelized (a plain sequential loop), so there's no multi-worker file
+-writer concern there, just the same "make progress visible" motivation.
+Logging starts *before* the identifier-parsing loop (not just the login
+phase), so parse-time skips (malformed/unrecognized-suffix) show up live
+too, not only in the final summary.
 
 `log_activity`'s `KIND` controls color (LOGIN=green, ERROR=red, CMD=dim,
 everything else=yellow) but only the `[KIND]` tag is colored, not the whole
@@ -323,7 +367,7 @@ finished.
 
 ## Before considering any change to lib/*.sh or oo.sh done
 
-Run `/bin/bash tests/run-tests.sh` (81 assertions as of this writing, mock
+Run `/bin/bash tests/run-tests.sh` (91 assertions as of this writing, mock
 `oc`, no real cluster/credentials needed) and confirm it's still green. It
 covers CLI targeting/comma-lists, project-name extraction edge cases,
 discovery parsing (including the sit-dismissed and unknown-suffix paths),

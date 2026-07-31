@@ -69,7 +69,12 @@ ui_start_live_tail() {
   fi
 }
 
-# Stops whatever ui_start_live_tail started (reads UI_TAIL_PID; no-op if empty).
+# Stops whatever ui_start_live_tail started (reads UI_TAIL_PID). If nothing
+# was ever started (not a real terminal -- piped, redirected, automation),
+# dumps the whole accumulated log to stderr instead of just letting it
+# vanish silently when the caller's work_dir gets cleaned up -- progress
+# should never be completely invisible just because stdout/stderr aren't a
+# terminal.
 ui_stop_live_tail() {
   if [[ -n "${UI_TAIL_PID:-}" ]]; then
     kill "$UI_TAIL_PID" 2>/dev/null
@@ -79,6 +84,8 @@ ui_stop_live_tail() {
     # `return 0` below. The 2>/dev/null above only hides the message, not
     # the exit code; `|| true` is what actually neutralizes it.
     wait "$UI_TAIL_PID" 2>/dev/null || true
+  elif [[ "${LOG_LEVEL:-normal}" != "quiet" && -n "${ACTIVITY_LOG:-}" && -f "${ACTIVITY_LOG:-}" ]]; then
+    cat "$ACTIVITY_LOG" >&2
   fi
   return 0
 }

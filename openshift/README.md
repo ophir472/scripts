@@ -132,7 +132,7 @@ behavior, just a different input method.
 | `-p project` | Only namespaces whose derived project matches. Comma-separated allowed. See **Project names** below. |
 | `--insecure` | Pass `--insecure-skip-tls-verify` to `oc login`. |
 | `-j N` | How many clusters to process concurrently (quota/search only). Default 8. |
-| `-l quiet\|normal\|verbose` | Progress verbosity (quota/search only, default `normal`). `quiet` = no progress output, just the final result. `normal` = live log of logins/fetches (last 15 lines, scrolling) on a real terminal, plain lines when piped/redirected. `verbose` = also echoes the literal `oc` command before it runs (password always masked). |
+| `-l quiet\|normal\|verbose` | Progress verbosity (quota/search/discover; default `normal`). `quiet` = no progress output, just the final result. `normal` = live log of logins/fetches (last 15 lines, scrolling) on a real terminal, plain lines when piped/redirected. `verbose` = also echoes the literal `oc` command before it runs (password always masked). |
 
 With no `-e`/`-c` at all, the default is everything (`-e all`).
 
@@ -187,6 +187,12 @@ end — last letter is the env (`d`=dev, `u`=uat, `p`=prod, `s`=sit is silently
 dismissed, anything else is skipped with a warning), the digits right before
 it plus the 3 letters before *those* become the short name (`abc12345u`). The
 server URL is `https://api.<full identifier>.<DISCOVERY_DOMAIN>`.
+
+Discovery logs its progress the same way quota/search do (see `-l` below) —
+each identifier as it's recognized or skipped, each login attempt, and how
+many namespaces were found per cluster. On a real terminal you see this
+live; piped or redirected, the full log still gets printed once discovery
+finishes, so it's never silently invisible.
 
 **By design, discovery always *fully replaces* `CLUSTERS`** from whatever it
 successfully logs into this run — it does not merge with the existing config.
@@ -259,6 +265,12 @@ cluster, prod password against a prod cluster). If that fails you get up to
 reasons), so a real bad password still surfaces normally as per-cluster
 "login failed" messages once the actual run starts, exactly as if
 verification wasn't there at all.
+
+That verification login isn't wasted: if the cluster it tested against also
+happens to be one of the clusters the real run targets (common, especially
+with `-e all`), the real run reuses that already-authenticated session
+instead of logging into it a second time — you'll see `Reusing verified
+login for <cluster>` in the progress log for that one.
 
 ## Security notes
 

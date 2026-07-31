@@ -54,9 +54,15 @@ Selection (combine as needed; default is -e all -> every cluster, every namespac
   -j N          how many clusters to process concurrently (default 8; quota
                 and search actions only -- each cluster logs in once, reused
                 for all its namespaces, never re-logged-in per namespace)
+  -l LEVEL      quiet|normal|verbose progress logging (default normal; all
+                actions). quiet = no progress output, just the final result.
+                normal = live login/fetch log on a real terminal (last 15
+                lines, scrolling), plain lines when piped/redirected.
+                verbose = also echoes the literal oc command before it runs
+                (password always masked)
 
 quota-only options:
-  -o file       output file (default ./output-<timestamp>.txt)
+  -o file       output file (default ./quota-report-<timestamp>.txt)
 
 discover-only options:
   -f file       cluster identifier list (required)
@@ -90,6 +96,7 @@ run_action_quota() {
   local work_dir
   work_dir=$(mktemp -d)
   trap "rm -rf '$work_dir'" EXIT
+  relocate_verified_kubeconfigs "$work_dir"
 
   ACTIVITY_LOG="$work_dir/activity.log"
   : > "$ACTIVITY_LOG"
@@ -159,6 +166,7 @@ run_action_search() {
   local work_dir
   work_dir=$(mktemp -d)
   trap "rm -rf '$work_dir'" EXIT
+  relocate_verified_kubeconfigs "$work_dir"
 
   ACTIVITY_LOG="$work_dir/activity.log"
   : > "$ACTIVITY_LOG"

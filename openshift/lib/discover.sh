@@ -58,6 +58,18 @@ run_action_discover() {
     exit 1
   fi
 
+  # Live progress log (same mechanism as quota/search): -l quiet suppresses
+  # it, otherwise a real terminal gets a live scrolling view via `tail -f`,
+  # piped/redirected runs just get plain lines. Set up before the parsing
+  # loop below so even parse-time skips (malformed/unrecognized) show up
+  # live, not just the login phase.
+  local work_dir
+  work_dir=$(mktemp -d)
+  trap "rm -rf '$work_dir'" EXIT
+  ACTIVITY_LOG="$work_dir/activity.log"
+  : > "$ACTIVITY_LOG"
+  ui_start_live_tail "$ACTIVITY_LOG"
+
   local id rc skipped_malformed=() skipped_unknown=() skipped_login=()
   local accepted_key seen_accepted=""
   RESOLVED_CLUSTERS=()
@@ -68,9 +80,9 @@ run_action_discover() {
     discover_parse_identifier "$id" || rc=$?
     case $rc in
       0) ;;
-      1) skipped_malformed+=("$id"); continue ;;
+      1) skipped_malformed+=("$id"); log_activity ERROR "Skipping '$id': doesn't match the identifier shape"; continue ;;
       2) continue ;;                        # sit, dismissed silently
-      3) skipped_unknown+=("$id"); continue ;;
+      3) skipped_unknown+=("$id"); log_activity ERROR "Skipping '$id': unrecognized env suffix"; continue ;;
     esac
     local server="https://api.${id}.${DISCOVERY_DOMAIN}"
     accepted_key="$DISCOVER_ENV:$DISCOVER_SHORT:$server"
@@ -82,6 +94,7 @@ run_action_discover() {
     acc_short+=("$DISCOVER_SHORT")
     acc_server+=("$server")
     RESOLVED_CLUSTERS+=("$accepted_key")
+    log_activity DISCOVER "Recognized $id -> $DISCOVER_SHORT ($DISCOVER_ENV)"
   done
 
   if [[ ${#RESOLVED_CLUSTERS[@]} -eq 0 ]]; then
@@ -90,22 +103,33 @@ run_action_discover() {
   fi
 
   prompt_passwords
+  relocate_verified_kubeconfigs "$work_dir"
 
-  local new_rows=() i env short server kubeconfig all_ns ns project
+  local new_rows=() i env short server kubeconfig all_ns ns_count ns project
   for ((i = 0; i < ${#acc_env[@]}; i++)); do
     env="${acc_env[$i]}"; short="${acc_short[$i]}"; server="${acc_server[$i]}"
-    if ! login_cluster "$server" "$env" "$INSECURE"; then
+    log_activity LOGIN "Logging into $short ($env)..."
+    log_cmd "oc login --server $server --username <user> --password ***"
+    if ! login_cluster_or_reuse "$server" "$env" "$short" "$INSECURE"; then
       skipped_login+=("$short ($server)")
+      log_activity ERROR "Login failed for $short"
       continue
     fi
+    log_activity LOGIN "Logged into $short"
     kubeconfig="$LOGIN_KUBECONFIG"
+    log_cmd "oc get projects -o jsonpath='{.items[*].metadata.name}'"
     all_ns=$(oc --kubeconfig="$kubeconfig" get projects -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+    ns_count=0
     for ns in $all_ns; do
       project=$(extract_project "$ns")
       new_rows+=("${env}|${short}|${server}|${ns}|${project}")
+      ns_count=$((ns_count + 1))
     done
+    log_activity DISCOVER "Found $ns_count namespace(s) on $short"
     rm -f "$kubeconfig"
   done
+
+  ui_stop_live_tail
 
   # Warn about any cluster (by short name) in the currently-loaded config
   # that this run didn't reproduce -- discovery always fully replaces

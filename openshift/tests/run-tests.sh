@@ -229,6 +229,22 @@ assert_eq "$QUOTA_EXIT" "0" "eventually succeeds"
 assert_contains "$QUOTA_ERR" "Login failed for produser (prod) against p1" "prod password tested against the prod cluster specifically"
 assert_contains "$QUOTA_OUT" "Grand totals across 2 cluster(s)" "both clusters end up processed once both passwords are right"
 
+echo "=== password verification: the verification cluster's login is reused, not repeated ==="
+# t1 (dev) and p1 (prod) are exactly the clusters prompt_passwords picks to
+# test-log into for -e all -- the real run should reuse those sessions
+# instead of logging into either one a second time.
+LOGIN_LOG="$WORKDIR/login-attempts.log"
+rm -f "$LOGIN_LOG"
+MOCK_LOGIN_LOG="$LOGIN_LOG" run_quota $'testpass\nprodpass\n' -e all
+DEV_LOGIN_COUNT=$(grep -c "fake-dev.example.com" "$LOGIN_LOG" 2>/dev/null || echo 0)
+PROD_LOGIN_COUNT=$(grep -c "fake-prod.example.com" "$LOGIN_LOG" 2>/dev/null || echo 0)
+assert_eq "$DEV_LOGIN_COUNT" "1" "t1 logged into exactly once (verification + real run reuse it), not twice"
+assert_eq "$PROD_LOGIN_COUNT" "1" "p1 logged into exactly once, not twice"
+assert_contains "$QUOTA_ERR" "Reusing verified login for t1" "explicitly reports reusing t1's verified session"
+assert_contains "$QUOTA_ERR" "Reusing verified login for p1" "explicitly reports reusing p1's verified session"
+assert_contains "$QUOTA_OUT" "Grand totals across 2 cluster(s), 4 namespace(s):" "the run still completes normally using the reused sessions"
+rm -f "$LOGIN_LOG"
+
 echo "=== search-string: finds a match ==="
 MOCK_SECRET_VALUE="super-secret-value" run_search $'testpass\nprodpass\n' -e all "super-secret-value"
 assert_contains "$SEARCH_OUT" "FOUND in" "match reported"
@@ -251,6 +267,13 @@ assert_contains "$DISCOVER_OUT" "4 namespace rows across 2 cluster(s)" "2 accept
 assert_contains "$DISCOVER_OUT" "Skipped (couldn't parse): short" "malformed identifier reported"
 assert_contains "$DISCOVER_OUT" "Skipped (unrecognized env suffix): clusterbar22222q" "unrecognized suffix reported"
 assert_not_contains "$DISCOVER_OUT" "clusterfoo11111s" "sit identifier dismissed with no mention at all"
+
+echo "=== discover: shows live progress logging, not silent ==="
+assert_contains "$DISCOVER_ERR" "[DISCOVER] Recognized clusterabc12345u -> abc12345u (uat)" "logs each recognized identifier as it's parsed"
+assert_contains "$DISCOVER_ERR" "[ERROR] Skipping 'short': doesn't match the identifier shape" "logs parse-time skips live too, not just in the final summary"
+assert_contains "$DISCOVER_ERR" "[LOGIN] Logging into abc12345u (uat)..." "logs each login attempt"
+assert_contains "$DISCOVER_ERR" "[LOGIN] Logged into abc12345u" "logs successful logins"
+assert_contains "$DISCOVER_ERR" "[DISCOVER] Found 2 namespace(s) on abc12345u" "logs how many namespaces were found per cluster"
 
 DISCOVERED_CLUSTERS_DUMP=""
 if [[ -f "$WORKDIR/discovered-config.sh" ]]; then

@@ -6,6 +6,8 @@
 #   MOCK_SECRET_NS, MOCK_SECRET_VALUE   which namespace holds a secret, and its plaintext value
 #   MOCK_LOGIN_FAIL_SERVERS space-separated substrings; `oc login` fails if --server matches one
 #   MOCK_EXPECTED_PASSWORD  if set, `oc login` fails unless --password matches exactly
+#   MOCK_LOGIN_LOG          if set, every `oc login` attempt appends "<server>" to this file,
+#                           regardless of success/failure -- lets tests count real login attempts
 
 args=("$@")
 get_opt() {
@@ -24,6 +26,7 @@ if [[ "$joined" == *" login "* ]]; then
   server=$(get_opt --server)
   kubeconfig=$(get_opt --kubeconfig)
   password=$(get_opt --password)
+  [[ -n "${MOCK_LOGIN_LOG:-}" ]] && echo "$server" >> "$MOCK_LOGIN_LOG"
   for pat in ${MOCK_LOGIN_FAIL_SERVERS:-}; do
     if [[ "$server" == *"$pat"* ]]; then
       exit 1
