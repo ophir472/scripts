@@ -57,6 +57,63 @@ unconditionally. Don't reach for `"${arr[@]:-}"` instead — that silently
 turns "zero args" into "one empty-string arg", which is a different, subtler
 bug if the callee ever inspects `$#` or positional args by number.
 
+**This bit `CLUSTERS` itself, and it's a real user-facing scenario, not just
+a theoretical one**: `resolve_clusters`, `config_list_envs`,
+`config_list_projects`, `config_match_clusters` (all `lib/common.sh`), and
+discover's "warn about dropped clusters" loop (`lib/discover.sh`) all did
+`for entry in "${CLUSTERS[@]}"` unconditionally. A fresh `config.sh` with
+`CLUSTERS=()` — exactly the state before a user's very first successful
+`discover` run — crashed every single action (quota, search, discover, the
+interactive menu) with `CLUSTERS[@]: unbound variable` instead of a helpful
+"no clusters configured" message. All five are now guarded with
+`[[ ${#CLUSTERS[@]} -gt 0 ]]` before the loop (or an early `return 0` for
+`config_match_clusters`, since nothing else in that function needs to run
+when `CLUSTERS` is empty). If you add another place that iterates `CLUSTERS`
+directly, guard it the same way — don't assume the shipped `config.sh` with
+its 3 placeholder rows is representative of what real installs look like
+before their first `discover`.
+
+## Numbered picker `read` loops must check for real EOF, not just bad input
+
+`menu_choose_one_numbered`/`menu_choose_many_numbered` (`lib/menu.sh`) loop
+`while true; do read -rp "> " choice; ...; done` re-prompting on invalid
+input. Neither originally checked whether `read` itself *failed* (closed/
+exhausted stdin) versus just returning an empty or malformed line — and
+since `local choice` starts as `""` rather than truly unset, a closed stdin
+made `read` fail silently forever with `$choice` frozen at `""`, spinning
+the retry loop infinitely (hundreds of MB of "Enter a number..." output in
+seconds, observed directly). Fixed by checking `if ! read ...; then ... exit
+1; fi` in both loops. `menu_choose_many_numbered` already treated an empty
+*line* as "all" (a deliberate UX shortcut for pressing bare Enter) — that's
+unrelated to and doesn't substitute for real EOF detection, since both leave
+`$choice` empty; the fix distinguishes "user pressed Enter" from "stdin is
+closed" instead of conflating them. If you add another `read`-in-a-loop
+prompt, give it the same check — `menu_confirm` and the password prompts
+don't need it since they're not in unbounded retry loops (a single failed
+`read` there just falls through as "no"/empty, not an infinite spin).
+
+## Discovery's backup filename must survive same-second collisions
+
+`run_action_discover`'s backup path is `${target}.bak.$(date +%Y%m%d_%H%M%S)`
+— second-granularity. Two runs against the same target within the same
+wall-clock second (plausible for a test suite, or scripted/automated
+discovery) generate an identical name, and `cp` silently overwrites whatever
+was there, discarding an earlier backup with no warning. This showed up as a
+genuinely flaky test (~1-in-5) before being tracked down: an earlier test
+elsewhere in the file also happened to trigger a backup against the same
+shared `$WORKDIR/discovered-config.sh` path, and whether the "exactly one
+backup" assertion passed or failed on any given run depended on whether that
+earlier backup and this one's timestamps happened to collide. Fixed at the
+source, not just in the test: the backup path now checks `[[ -f "$backup" ]]`
+in a loop, appending `.2`, `.3`, ... until it finds a name that doesn't
+already exist, so a colliding timestamp can never silently destroy a prior
+backup. Verified directly (forced collision, confirmed the pre-existing
+file's content survived and a distinct `.2` file was created), not just
+inferred from the test passing. If you add another place that generates a
+timestamped filename meant to preserve history, use this same
+check-before-writing pattern rather than trusting the timestamp is unique
+enough.
+
 ## `trap ... EXIT` inside a function must not reference a `local` var by name
 
 Single-quoting a trap body (`trap 'rm -rf "$work_dir"' EXIT`) defers
@@ -367,7 +424,7 @@ finished.
 
 ## Before considering any change to lib/*.sh or oo.sh done
 
-Run `/bin/bash tests/run-tests.sh` (91 assertions as of this writing, mock
+Run `/bin/bash tests/run-tests.sh` (93 assertions as of this writing, mock
 `oc`, no real cluster/credentials needed) and confirm it's still green. It
 covers CLI targeting/comma-lists, project-name extraction edge cases,
 discovery parsing (including the sit-dismissed and unknown-suffix paths),

@@ -149,25 +149,31 @@ split_config_entry() {
 resolve_clusters() {
   RESOLVED_CLUSTERS=()
   local entry key seen="" include
-  for entry in "${CLUSTERS[@]}"; do
-    split_config_entry "$entry"
-    key="$CFG_ENV:$CFG_SHORT:$CFG_SERVER"
-    if [[ ",$seen," == *",$key,"* ]]; then
-      continue
-    fi
-    include=0
-    if [[ -n "$CLUSTER_FILTER" ]]; then
-      csv_contains "$CLUSTER_FILTER" "$CFG_SHORT" && include=1
-    elif [[ "$ENV_FILTER" == "all" ]]; then
-      include=1
-    elif csv_contains "$ENV_FILTER" "$CFG_ENV"; then
-      include=1
-    fi
-    if [[ $include -eq 1 ]]; then
-      RESOLVED_CLUSTERS+=("$key")
-      seen="${seen:+$seen,}$key"
-    fi
-  done
+  # bash 3.2: expanding an empty array under `set -u` throws "unbound
+  # variable" (fixed only in 4.4+) -- a fresh/empty CLUSTERS (before the
+  # first successful `discover`) would otherwise crash here instead of
+  # falling through to the "no clusters matched" error below.
+  if [[ ${#CLUSTERS[@]} -gt 0 ]]; then
+    for entry in "${CLUSTERS[@]}"; do
+      split_config_entry "$entry"
+      key="$CFG_ENV:$CFG_SHORT:$CFG_SERVER"
+      if [[ ",$seen," == *",$key,"* ]]; then
+        continue
+      fi
+      include=0
+      if [[ -n "$CLUSTER_FILTER" ]]; then
+        csv_contains "$CLUSTER_FILTER" "$CFG_SHORT" && include=1
+      elif [[ "$ENV_FILTER" == "all" ]]; then
+        include=1
+      elif csv_contains "$ENV_FILTER" "$CFG_ENV"; then
+        include=1
+      fi
+      if [[ $include -eq 1 ]]; then
+        RESOLVED_CLUSTERS+=("$key")
+        seen="${seen:+$seen,}$key"
+      fi
+    done
+  fi
 
   if [[ ${#RESOLVED_CLUSTERS[@]} -eq 0 ]]; then
     echo "ERROR: no clusters matched selection (env=${ENV_FILTER:-<none>} cluster=${CLUSTER_FILTER:-<none>})" >&2
@@ -180,13 +186,15 @@ resolve_clusters() {
 config_list_envs() {
   local entry seen=""
   CONFIG_ENVS=()
-  for entry in "${CLUSTERS[@]}"; do
-    split_config_entry "$entry"
-    if [[ ",$seen," != *",$CFG_ENV,"* ]]; then
-      CONFIG_ENVS+=("$CFG_ENV")
-      seen="${seen:+$seen,}$CFG_ENV"
-    fi
-  done
+  if [[ ${#CLUSTERS[@]} -gt 0 ]]; then
+    for entry in "${CLUSTERS[@]}"; do
+      split_config_entry "$entry"
+      if [[ ",$seen," != *",$CFG_ENV,"* ]]; then
+        CONFIG_ENVS+=("$CFG_ENV")
+        seen="${seen:+$seen,}$CFG_ENV"
+      fi
+    done
+  fi
   return 0
 }
 
@@ -194,13 +202,15 @@ config_list_envs() {
 config_list_projects() {
   local entry seen=""
   CONFIG_PROJECTS=()
-  for entry in "${CLUSTERS[@]}"; do
-    split_config_entry "$entry"
-    if [[ -n "$CFG_PROJECT" && ",$seen," != *",$CFG_PROJECT,"* ]]; then
-      CONFIG_PROJECTS+=("$CFG_PROJECT")
-      seen="${seen:+$seen,}$CFG_PROJECT"
-    fi
-  done
+  if [[ ${#CLUSTERS[@]} -gt 0 ]]; then
+    for entry in "${CLUSTERS[@]}"; do
+      split_config_entry "$entry"
+      if [[ -n "$CFG_PROJECT" && ",$seen," != *",$CFG_PROJECT,"* ]]; then
+        CONFIG_PROJECTS+=("$CFG_PROJECT")
+        seen="${seen:+$seen,}$CFG_PROJECT"
+      fi
+    done
+  fi
   return 0
 }
 
@@ -212,6 +222,7 @@ config_match_clusters() {
   local envs_csv="$1" projects_csv="$2"
   local entry key seen=""
   MENU_CLUSTERS=()
+  [[ ${#CLUSTERS[@]} -eq 0 ]] && return 0
   for entry in "${CLUSTERS[@]}"; do
     split_config_entry "$entry"
     if [[ "$envs_csv" != "all" ]] && ! csv_contains "$envs_csv" "$CFG_ENV"; then

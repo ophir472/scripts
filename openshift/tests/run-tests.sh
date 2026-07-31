@@ -305,11 +305,35 @@ assert_not_contains "$DISCOVER_ERR" "WARNING" "no warning when every existing cl
 cp "$TESTS_DIR/fixtures/config.sh" "$WORKDIR/config.sh"
 
 echo "=== discover: backs up an existing target file instead of clobbering it ==="
+# discovered-config.sh was already written by earlier tests above, so clear
+# any backups they triggered first -- otherwise this assertion is a coin
+# flip: an earlier backup and this one only collide into a single file
+# (same per-second timestamp) if they happen to land in the same wall-clock
+# second, so "exactly one" would fail whenever a test run straddles a
+# second boundary between those two run_discover calls.
+rm -f "$WORKDIR"/discovered-config.sh.bak.*
 echo "# pre-existing config" > "$WORKDIR/discovered-config.sh"
 run_discover $'testpass\nprodpass\n' -f "$TESTS_DIR/fixtures/cluster-ids.txt" -o "$WORKDIR/discovered-config.sh"
 assert_contains "$DISCOVER_OUT" "Backed up existing config" "announces the backup"
 BACKUP_COUNT=$(ls "$WORKDIR"/discovered-config.sh.bak.* 2>/dev/null | wc -l | tr -d ' ')
 assert_eq "$BACKUP_COUNT" "1" "exactly one backup file created"
+
+echo "=== discover: two rapid backups never clobber each other, even with colliding timestamps ==="
+# The backup filename is second-granularity, so two runs in the same wall
+# clock second would generate an identical name -- verifies the
+# collision-avoidance suffix (.2, .3, ...) kicks in instead of silently
+# overwriting an earlier backup, regardless of whether this particular test
+# run happens to straddle a second boundary or not.
+rm -f "$WORKDIR"/discovered-config.sh.bak.*
+echo "# first version" > "$WORKDIR/discovered-config.sh"
+run_discover $'testpass\nprodpass\n' -f "$TESTS_DIR/fixtures/cluster-ids.txt" -o "$WORKDIR/discovered-config.sh"
+echo "# second version" > "$WORKDIR/discovered-config.sh"
+run_discover $'testpass\nprodpass\n' -f "$TESTS_DIR/fixtures/cluster-ids.txt" -o "$WORKDIR/discovered-config.sh"
+TWO_BACKUP_COUNT=$(ls "$WORKDIR"/discovered-config.sh.bak.* 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "$TWO_BACKUP_COUNT" "2" "two distinct backups exist, not one overwriting the other"
+FIRST_VERSION_SURVIVED=$(grep -l "first version" "$WORKDIR"/discovered-config.sh.bak.* 2>/dev/null | wc -l | tr -d ' ')
+assert_eq "$FIRST_VERSION_SURVIVED" "1" "the first backup's content survives even if the second run's timestamp collides with it"
+rm -f "$WORKDIR"/discovered-config.sh.bak.*
 
 echo "=== oo.sh: missing -a errors out instead of silently doing nothing ==="
 printf '' | /bin/bash "$WORKDIR/oo.sh" -e all >"$WORKDIR/nact.out" 2>"$WORKDIR/nact.err"

@@ -137,10 +137,15 @@ run_action_discover() {
   # disappear from the file (whether it failed login, had zero namespaces,
   # or was simply left out of this run's identifier list).
   local old_shorts="" cfg_entry new_shorts="" row_short row_entry
-  for cfg_entry in "${CLUSTERS[@]}"; do
-    split_config_entry "$cfg_entry"
-    csv_contains "$old_shorts" "$CFG_SHORT" || old_shorts="${old_shorts:+$old_shorts,}$CFG_SHORT"
-  done
+  # bash 3.2: expanding an empty array under `set -u` throws "unbound
+  # variable" -- a fresh/empty CLUSTERS (first-ever discover run) would
+  # otherwise crash right here instead of just finding nothing to warn about.
+  if [[ ${#CLUSTERS[@]} -gt 0 ]]; then
+    for cfg_entry in "${CLUSTERS[@]}"; do
+      split_config_entry "$cfg_entry"
+      csv_contains "$old_shorts" "$CFG_SHORT" || old_shorts="${old_shorts:+$old_shorts,}$CFG_SHORT"
+    done
+  fi
   for row_entry in "${new_rows[@]}"; do
     IFS='|' read -r _ row_short _ _ _ <<< "$row_entry"
     csv_contains "$new_shorts" "$row_short" || new_shorts="${new_shorts:+$new_shorts,}$row_short"
@@ -165,7 +170,15 @@ run_action_discover() {
 
   local target="${OUTPUT_FILE:-$SCRIPT_DIR/config.sh}"
   if [[ -f "$target" ]]; then
-    local backup="${target}.bak.$(date +%Y%m%d_%H%M%S)"
+    # Second-granularity timestamp collides if discover runs twice within
+    # the same second (rare for a human, plausible for automation) -- an
+    # incrementing suffix guarantees a fresh backup path either way, so an
+    # earlier backup is never silently overwritten.
+    local backup="${target}.bak.$(date +%Y%m%d_%H%M%S)" backup_n=2
+    while [[ -f "$backup" ]]; do
+      backup="${target}.bak.$(date +%Y%m%d_%H%M%S).$backup_n"
+      backup_n=$((backup_n + 1))
+    done
     cp "$target" "$backup"
     echo "Backed up existing config to $backup"
   fi

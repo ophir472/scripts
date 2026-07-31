@@ -14,7 +14,16 @@ menu_choose_one_numbered() {
     printf '  %d) %s\n' "$((i + 1))" "${options[$i]}" >&2
   done
   while true; do
-    read -rp "> " choice
+    # `read` returning non-zero here means stdin is closed/exhausted (EOF),
+    # not just "empty line" -- without this check, a closed/empty stdin
+    # makes this loop spin forever re-printing the error line, since
+    # $choice (declared local, so it starts as "" rather than unset) never
+    # changes and never matches a valid number.
+    if ! read -rp "> " choice; then
+      echo "" >&2
+      echo "ERROR: no more input (stdin closed) while waiting for a selection." >&2
+      exit 1
+    fi
     if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#options[@]} )); then
       echo "${options[$((choice - 1))]}"
       return 0
@@ -36,7 +45,14 @@ menu_choose_many_numbered() {
     printf '  %d) %s\n' "$((i + 1))" "${options[$i]}" >&2
   done
   while true; do
-    read -rp "> " choice
+    # Distinguish real EOF (stdin closed) from the user just pressing Enter
+    # -- both leave $choice empty, but only a deliberate blank Enter should
+    # silently mean "all"; a closed stdin should error, not guess.
+    if ! read -rp "> " choice; then
+      echo "" >&2
+      echo "ERROR: no more input (stdin closed) while waiting for a selection." >&2
+      exit 1
+    fi
     choice="$(echo "$choice" | tr -d '[:space:]')"
     if [[ "$choice" == "all" || "$choice" == "All" || -z "$choice" ]]; then
       echo "all"
