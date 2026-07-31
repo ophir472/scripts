@@ -84,7 +84,7 @@ run_action_quota() {
   prompt_passwords
 
   if [[ -z "$OUTPUT_FILE" ]]; then
-    OUTPUT_FILE="./output-$(date +%Y%m%d_%H%M%S).txt"
+    OUTPUT_FILE="./quota-report-$(date +%Y%m%d_%H%M%S).txt"
   fi
 
   local work_dir
