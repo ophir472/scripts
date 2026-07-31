@@ -113,6 +113,35 @@ assert_eq "$(printf '2\n' | menu_choose_one 'pick' opt-a opt-b opt-c 2>/dev/null
 assert_eq "$(printf '1,3\n' | menu_choose_many 'pick' opt-a opt-b opt-c opt-d 2>/dev/null)" "$(printf 'opt-a\nopt-c')" "multi choice by comma list"
 assert_eq "$(printf 'all\n' | menu_choose_many 'pick' opt-a opt-b 2>/dev/null)" "all" "multi choice \"all\" shortcut"
 
+echo "=== unit: live tail start/stop doesn't abort under set -e (regression) ==="
+# This whole path is gated on ui_stderr_is_tty, which is always false under
+# piped test input -- stubbing it lets this regression get covered even
+# without a real terminal. Two real bugs shipped here before: (1) stopping a
+# tail that was never started called `wait ''` (invalid, aborts under set
+# -e), (2) `wait "$pid"` on a killed tail naturally returns its exit status
+# (143), which under set -e silently aborts the whole script one line before
+# `return 0` -- the `2>/dev/null` on that wait only hid the message, not the
+# exit code.
+UI_TAIL_TEST_LOG=$(mktemp)
+UI_TAIL_REGRESSION_OUT=$(
+  set -e
+  source "$WORKDIR/lib/ui.sh"
+  ui_stderr_is_tty() { return 0; }
+  LOG_LEVEL=normal
+  echo "pre-existing line" > "$UI_TAIL_TEST_LOG"
+  ui_stop_live_tail   # never started -- must not try to wait on an empty PID
+  echo "SURVIVED_NEVER_STARTED"
+  ui_start_live_tail "$UI_TAIL_TEST_LOG"
+  sleep 0.2
+  ui_stop_live_tail   # kill+wait a real tail -- must not abort on its exit status
+  echo "SURVIVED_START_STOP"
+)
+UI_TAIL_REGRESSION_EXIT=$?
+rm -f "$UI_TAIL_TEST_LOG"
+assert_eq "$UI_TAIL_REGRESSION_EXIT" "0" "does not abort under set -e"
+assert_contains "$UI_TAIL_REGRESSION_OUT" "SURVIVED_NEVER_STARTED" "stopping a never-started tail is a no-op"
+assert_contains "$UI_TAIL_REGRESSION_OUT" "SURVIVED_START_STOP" "starting then stopping a real tail completes normally"
+
 export PATH="$WORKDIR:$PATH"
 
 echo "=== quota: default (-e all) covers every cluster/namespace ==="
@@ -153,16 +182,16 @@ assert_contains "$(cat "$WORKDIR/ierr.txt")" "About to run, for each of the 2 cl
 assert_contains "$(cat "$WORKDIR/ierr.txt")" "oc login --server" "shows the real oc login command"
 assert_contains "$(cat "$WORKDIR/ierr.txt")" "--password ***" "password is masked, never shown in the clear"
 assert_contains "$(cat "$WORKDIR/ierr.txt")" "oc get quota -n <namespace> -o json" "shows the per-namespace command as a template"
-REPORT_FILE=$(ls "$WORKDIR"/output-*.txt 2>/dev/null | head -1)
+REPORT_FILE=$(ls "$WORKDIR"/quota-report-*.txt 2>/dev/null | head -1)
 assert_contains "$([[ -n "$REPORT_FILE" ]] && cat "$REPORT_FILE")" "Grand totals across 2 cluster(s), 4 namespace(s):" "interactive run produced the same report a flag-driven run would"
-rm -f "$WORKDIR"/output-*.txt
+rm -f "$WORKDIR"/quota-report-*.txt
 
 echo "=== interactive menu: cancelling at the final confirm runs nothing ==="
 (cd "$WORKDIR" && printf '1\nall\nall\nn\nn\n' | /bin/bash "$WORKDIR/oo.sh" >"$WORKDIR/cout.txt" 2>"$WORKDIR/cerr.txt")
 CANCEL_EXIT=$?
 assert_eq "$CANCEL_EXIT" "0" "cancelling exits cleanly, not an error"
 assert_contains "$(cat "$WORKDIR/cerr.txt")" "Cancelled" "confirms the cancellation"
-CANCEL_REPORTS=$(ls "$WORKDIR"/output-*.txt 2>/dev/null | wc -l | tr -d ' ')
+CANCEL_REPORTS=$(ls "$WORKDIR"/quota-report-*.txt 2>/dev/null | wc -l | tr -d ' ')
 assert_eq "$CANCEL_REPORTS" "0" "no report written, no login attempted, when cancelled"
 
 echo "=== quota: login failure on one cluster doesn't stop the run ==="

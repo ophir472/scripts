@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Interactive menu shown when oo.sh is run with no arguments. Source config.sh
-# + common.sh + quota.sh + search.sh first, then this file.
+# + common.sh + lib/ui.sh + quota.sh + search.sh first, then this file.
 
-# Numbered single-choice prompt. $1 = prompt text, remaining args = options.
-# Echoes the chosen option text (not its number).
-menu_choose_one() {
+# Numbered single-choice prompt (fallback for non-tty stdin -- see
+# menu_choose_one). $1 = prompt text, remaining args = options. Echoes the
+# chosen option text (not its number).
+menu_choose_one_numbered() {
   local prompt="$1"; shift
   local -a options=("$@")
   local i choice
@@ -22,10 +23,11 @@ menu_choose_one() {
   done
 }
 
-# Numbered multi-choice prompt with an "All" shortcut. $1 = prompt text,
-# remaining args = options. User types comma-separated numbers (e.g. "1,3") or
-# "all". Echoes the chosen options newline-separated, or the single line "all".
-menu_choose_many() {
+# Numbered multi-choice prompt (fallback -- see menu_choose_many) with an
+# "All" shortcut. $1 = prompt text, remaining args = options. User types
+# comma-separated numbers (e.g. "1,3") or "all". Echoes the chosen options
+# newline-separated, or the single line "all".
+menu_choose_many_numbered() {
   local prompt="$1"; shift
   local -a options=("$@")
   local i choice num out
@@ -59,6 +61,152 @@ menu_choose_many() {
     fi
     echo "Enter comma-separated numbers between 1 and ${#options[@]}, or \"all\"." >&2
   done
+}
+
+# Redraws the single-choice list in place, reading _MENU_OPTIONS /
+# _MENU_SELECTED (globals, not locals -- bash 3.2 has no namerefs, and this
+# keeps the draw logic shared between the initial paint and every redraw
+# without a nested function).
+_menu_draw_one() {
+  local i
+  for ((i = 0; i < ${#_MENU_OPTIONS[@]}; i++)); do
+    printf '\033[2K\r' >&2
+    if [[ $i -eq $_MENU_SELECTED ]]; then
+      printf '%s> %s%s\n' "$UI_CYAN" "${_MENU_OPTIONS[$i]}" "$UI_RESET" >&2
+    else
+      printf '  %s\n' "${_MENU_OPTIONS[$i]}" >&2
+    fi
+  done
+}
+
+# Arrow-key single-choice picker. Same signature/output as
+# menu_choose_one_numbered. Only called when stdin is a real terminal.
+menu_choose_one_arrow() {
+  local prompt="$1"; shift
+  _MENU_OPTIONS=("$@")
+  _MENU_SELECTED=0
+  local n=${#_MENU_OPTIONS[@]} key
+
+  echo "$prompt" >&2
+  echo "(↑/↓ to move, enter to select, q to cancel)" >&2
+  ui_menu_setup_tty
+  _menu_draw_one
+
+  while true; do
+    ui_read_key; key="$UI_KEY"
+    case "$key" in
+      UP) _MENU_SELECTED=$(( (_MENU_SELECTED - 1 + n) % n )) ;;
+      DOWN) _MENU_SELECTED=$(( (_MENU_SELECTED + 1) % n )) ;;
+      ENTER)
+        ui_menu_restore_tty
+        echo "${_MENU_OPTIONS[$_MENU_SELECTED]}"
+        return 0
+        ;;
+      QUIT)
+        ui_menu_restore_tty
+        echo "Cancelled." >&2
+        exit 0
+        ;;
+    esac
+    printf '\033[%dA' "$n" >&2
+    _menu_draw_one
+  done
+}
+
+# Redraws the multi-choice list in place, reading _MENU_OPTIONS /
+# _MENU_SELECTED / _MENU_CHECKED globals (see _menu_draw_one for why globals).
+_menu_draw_many() {
+  local i mark
+  for ((i = 0; i < ${#_MENU_OPTIONS[@]}; i++)); do
+    mark="[ ]"
+    [[ "${_MENU_CHECKED[$i]}" == "1" ]] && mark="[x]"
+    printf '\033[2K\r' >&2
+    if [[ $i -eq $_MENU_SELECTED ]]; then
+      printf '%s> %s %s%s\n' "$UI_CYAN" "$mark" "${_MENU_OPTIONS[$i]}" "$UI_RESET" >&2
+    else
+      printf '  %s %s\n' "$mark" "${_MENU_OPTIONS[$i]}" >&2
+    fi
+  done
+}
+
+# Arrow-key multi-choice picker. Same signature/output as
+# menu_choose_many_numbered (newline-separated picks, or the single line
+# "all" if nothing was checked when confirmed). Only called when stdin is a
+# real terminal.
+menu_choose_many_arrow() {
+  local prompt="$1"; shift
+  _MENU_OPTIONS=("$@")
+  _MENU_SELECTED=0
+  local n=${#_MENU_OPTIONS[@]} key i any
+
+  _MENU_CHECKED=()
+  for ((i = 0; i < n; i++)); do _MENU_CHECKED[$i]=0; done
+
+  echo "$prompt" >&2
+  echo "(↑/↓ move, space toggle, a select-all, enter confirm, q cancel)" >&2
+  ui_menu_setup_tty
+  _menu_draw_many
+
+  while true; do
+    ui_read_key; key="$UI_KEY"
+    case "$key" in
+      UP) _MENU_SELECTED=$(( (_MENU_SELECTED - 1 + n) % n )) ;;
+      DOWN) _MENU_SELECTED=$(( (_MENU_SELECTED + 1) % n )) ;;
+      SPACE)
+        if [[ "${_MENU_CHECKED[$_MENU_SELECTED]}" == "1" ]]; then
+          _MENU_CHECKED[$_MENU_SELECTED]=0
+        else
+          _MENU_CHECKED[$_MENU_SELECTED]=1
+        fi
+        ;;
+      OTHER:a|OTHER:A)
+        any=0
+        for ((i = 0; i < n; i++)); do [[ "${_MENU_CHECKED[$i]}" == "0" ]] && any=1; done
+        for ((i = 0; i < n; i++)); do _MENU_CHECKED[$i]=$any; done
+        ;;
+      ENTER)
+        ui_menu_restore_tty
+        any=0
+        for ((i = 0; i < n; i++)); do [[ "${_MENU_CHECKED[$i]}" == "1" ]] && any=1; done
+        if [[ $any -eq 0 ]]; then
+          echo "all"
+        else
+          for ((i = 0; i < n; i++)); do
+            [[ "${_MENU_CHECKED[$i]}" == "1" ]] && printf '%s\n' "${_MENU_OPTIONS[$i]}"
+          done
+        fi
+        return 0
+        ;;
+      QUIT)
+        ui_menu_restore_tty
+        echo "Cancelled." >&2
+        exit 0
+        ;;
+    esac
+    printf '\033[%dA' "$n" >&2
+    _menu_draw_many
+  done
+}
+
+# Single-choice prompt: arrow keys on a real terminal, numbered input
+# otherwise (piped/redirected stdin -- tests, automation). Same
+# signature/output either way, so callers never need to care which one ran.
+menu_choose_one() {
+  if ui_stdin_is_tty; then
+    menu_choose_one_arrow "$@"
+  else
+    menu_choose_one_numbered "$@"
+  fi
+}
+
+# Multi-choice prompt: arrow keys on a real terminal, numbered input
+# otherwise. Same signature/output either way.
+menu_choose_many() {
+  if ui_stdin_is_tty; then
+    menu_choose_many_arrow "$@"
+  else
+    menu_choose_many_numbered "$@"
+  fi
 }
 
 # $1 = prompt text. Returns 0 for yes, 1 for no. Defaults to no on empty input.

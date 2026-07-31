@@ -221,13 +221,50 @@ line — deliberate, per explicit user preference for something calmer than a
 wall of colored text. `log_cmd` (echoes the literal `oc` command about to
 run, password always masked as `***`) only fires at `verbose`.
 
-Two `set -e` bugs shipped in this file before landing: `ui_stop_live_tail`
-called `wait "$pid"` unconditionally even when `$pid` was empty (no tty, no
-tail started) — `wait ''` is invalid and aborts the whole script as a bare
-statement. Guard any use of a "maybe-empty PID" the same way `[[ -n "$pid" ]]
-&& { kill ...; wait ...; }`, never call `wait` on a variable that might be
-empty. If you add a new `log_activity` call site, no special care needed
-there — it's `[[ ... ]] && return 0`-guarded internally and safe.
+**This whole path is invisible to the piped test suite by construction** --
+`ui_stderr_is_tty`/`ui_stdin_is_tty` are false under piped input, so
+`tail -f` and the arrow-key reader never actually run in CI. Three real bugs
+shipped here before being caught, all only reproducible against a genuine
+pty (verified with Python's `pty.fork()`, not `script`/`expect` -- `script`'s
+own stdin handling didn't compose cleanly with piping further input through
+it):
+
+1. `ui_stop_live_tail` called `wait "$pid"` unconditionally even when `$pid`
+   was empty (no tty, no tail started) -- `wait ''` is invalid and aborts
+   under `set -e` as a bare statement.
+2. `ui_start_live_tail`/`ui_read_key` were originally called via command
+   substitution (`pid=$(ui_start_live_tail ...)`, `key=$(ui_read_key)`).
+   Command substitution always forks a subshell -- so `tail ... &` /
+   the blocking `read` ran in a *subshell*, not the caller's own shell. For
+   `tail`, that subshell exits immediately after echoing `$!`, orphaning the
+   backgrounded `tail` before the caller ever gets a PID it can actually
+   `wait` on as a real child. For key-reading, it meant a `trap ... INT` set
+   by `ui_menu_setup_tty` and the blocked `read` lived in *different*
+   processes, which is fragile depending on how a terminal/multiplexer
+   propagates signals. Fix in both cases: don't echo-and-capture, set a
+   global directly (`UI_TAIL_PID`, `UI_KEY`) so the relevant work happens in
+   the exact process that holds the state/trap it needs.
+3. **The subtle one**: even after (2), `ui_stop_live_tail`'s
+   `wait "$UI_TAIL_PID" 2>/dev/null` still silently aborted the script under
+   `set -e` -- `wait` naturally returns the killed process's own exit status
+   (143, SIGTERM), and `2>/dev/null` only suppresses the *message*, not the
+   *exit code*. Since this is an unguarded bare statement, `set -e` triggers
+   immediately, one line before `return 0`. Symptom: `run_action_quota`
+   would log in, fetch quota for every namespace successfully, then just...
+   stop, with zero indication why -- no error message, no "Report written
+   to", `ps` shows nothing running because the process already exited. This
+   took the longest to isolate because every simplified reproduction
+   (`tail` + parallel workers, without `set -e`) worked fine; the bug only
+   exists in scripts that actually run under `set -e`, which `oo.sh` does.
+   Fix: `wait "$UI_TAIL_PID" 2>/dev/null || true`.
+
+If you touch `ui_start_live_tail`/`ui_stop_live_tail`/`ui_read_key` again,
+verify against a real pty (`python3 -c` with the `pty` module), not just the
+piped test suite -- the suite provides regression coverage by stubbing
+`ui_stderr_is_tty` to force the path open (see "live tail start/stop doesn't
+abort under set -e" in `tests/run-tests.sh`), but a *new* bug in this area
+could easily slip past that same stub if it doesn't also exercise whatever's
+different this time.
 
 The interactive menu's pre-run confirmation (`lib/menu.sh`) shows the actual
 `oc login`/`oc get projects`/`oc get quota`|`get secrets` commands (password
@@ -236,6 +273,36 @@ cluster as a representative example, since the exact per-namespace command
 list isn't knowable before login. Don't try to enumerate every cluster's
 exact commands here; the cluster list itself is already shown separately
 right below it.
+
+## Arrow-key menu (`lib/menu.sh` + `lib/ui.sh`): dispatch on `ui_stdin_is_tty`
+
+`menu_choose_one`/`menu_choose_many` are thin dispatchers: arrow-key picker
+(`*_arrow`) when stdin is a real terminal, numbered picker (`*_numbered`,
+the original implementation) otherwise. This is why the whole automated test
+suite (piped input throughout) never needed to change to get the modern menu
+-- it always takes the numbered path, unchanged. Only a human at a real
+keyboard ever reaches the arrow-key code.
+
+Implementation notes if you touch the arrow-key pickers:
+- Raw mode (`stty -icanon -echo`) is required to read one keypress at a time
+  without waiting for Enter -- `ui_menu_setup_tty`/`ui_menu_restore_tty`
+  save/restore it. **Always** pair setup with restore on every exit path
+  (Enter, cancel, and `trap ... INT` for Ctrl-C) -- leaving the terminal in
+  raw mode breaks the user's shell until they run `stty sane`.
+- An arrow key is an escape sequence (`Esc [ A/B/C/D`), not one byte, so
+  `ui_read_key` does a follow-up `read -rsn2 -t 1 rest` after seeing `Esc`.
+  bash 3.2's `read -t` **only accepts integer seconds** -- `-t 0.01` errors
+  with "invalid timeout specification" and silently breaks arrow-key
+  detection entirely (every arrow key falls through to the `QUIT` case).
+  `-t 1` is the fix; the cost is a bare lone `Esc` press taking up to 1s to
+  resolve as cancel, acceptable since `q` is also available.
+- `_menu_draw_one`/`_menu_draw_many` and the arrow-key pickers communicate
+  via predictable globals (`_MENU_OPTIONS`, `_MENU_SELECTED`, `_MENU_CHECKED`
+  ), not namerefs or return values -- same reason as everywhere else in this
+  codebase (bash 3.2).
+- Cursor hide/show (`\033[?25l` / `\033[?25h`) happens in
+  `ui_menu_setup_tty`/`ui_menu_restore_tty` too, so it's automatically
+  covered by the same setup/restore discipline.
 
 ## Discovery fully replaces, never merges -- by decision, not oversight
 
@@ -256,7 +323,7 @@ finished.
 
 ## Before considering any change to lib/*.sh or oo.sh done
 
-Run `/bin/bash tests/run-tests.sh` (78 assertions as of this writing, mock
+Run `/bin/bash tests/run-tests.sh` (81 assertions as of this writing, mock
 `oc`, no real cluster/credentials needed) and confirm it's still green. It
 covers CLI targeting/comma-lists, project-name extraction edge cases,
 discovery parsing (including the sit-dismissed and unknown-suffix paths),

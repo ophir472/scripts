@@ -93,8 +93,7 @@ run_action_quota() {
 
   ACTIVITY_LOG="$work_dir/activity.log"
   : > "$ACTIVITY_LOG"
-  local tail_pid
-  tail_pid=$(ui_start_live_tail "$ACTIVITY_LOG")
+  ui_start_live_tail "$ACTIVITY_LOG"
 
   # Clusters are independent (different servers/kubeconfigs), so they're
   # processed concurrently (batches of $PARALLEL_JOBS, default 8, override
@@ -102,7 +101,7 @@ run_action_quota() {
   # sequential, which was slow with dozens of clusters.
   run_clusters_parallel quota_process_cluster "$work_dir"
 
-  ui_stop_live_tail "$tail_pid"
+  ui_stop_live_tail
 
   local summary_tmp="$work_dir/merged.summary" extended_tmp="$work_dir/merged.extended"
   : > "$extended_tmp"
@@ -163,14 +162,13 @@ run_action_search() {
 
   ACTIVITY_LOG="$work_dir/activity.log"
   : > "$ACTIVITY_LOG"
-  local tail_pid
-  tail_pid=$(ui_start_live_tail "$ACTIVITY_LOG")
+  ui_start_live_tail "$ACTIVITY_LOG"
 
   # Clusters are independent, so processed concurrently (batches of
   # $PARALLEL_JOBS, default 8, override with -j) instead of one at a time.
   run_clusters_parallel search_process_cluster "$work_dir" "$search_string"
 
-  ui_stop_live_tail "$tail_pid"
+  ui_stop_live_tail
 
   local total=${#RESOLVED_CLUSTERS[@]}
   local i

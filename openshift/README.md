@@ -106,8 +106,15 @@ Run with no arguments at all:
 ```
 
 Walks you through: pick an action → pick environment(s) → pick project(s) →
-optionally narrow down the cluster list → shows the exact equivalent command
-and full cluster list → asks to confirm before logging into anything.
+optionally narrow down the cluster list → shows the real `oc` commands about
+to run (login/list, plus a per-namespace template — password always masked)
+and the full cluster list → asks to confirm before logging into anything.
+
+At a real terminal, every choice uses arrow keys: ↑/↓ to move, Space to
+toggle a selection, `a` to select all, Enter to confirm, `q` to cancel. If
+input isn't an interactive terminal (piped, redirected, scripted), it
+automatically falls back to typing a number instead — same questions, same
+behavior, just a different input method.
 
 ## Flag-driven mode
 
@@ -125,6 +132,7 @@ and full cluster list → asks to confirm before logging into anything.
 | `-p project` | Only namespaces whose derived project matches. Comma-separated allowed. See **Project names** below. |
 | `--insecure` | Pass `--insecure-skip-tls-verify` to `oc login`. |
 | `-j N` | How many clusters to process concurrently (quota/search only). Default 8. |
+| `-l quiet\|normal\|verbose` | Progress verbosity (quota/search only, default `normal`). `quiet` = no progress output, just the final result. `normal` = live log of logins/fetches (last 15 lines, scrolling) on a real terminal, plain lines when piped/redirected. `verbose` = also echoes the literal `oc` command before it runs (password always masked). |
 
 With no `-e`/`-c` at all, the default is everything (`-e all`).
 
